@@ -1,0 +1,203 @@
+@import "tailwindcss";
+
+/* ============================================================
+   NCST Centralized RFID System — design tokens
+
+   THE PALETTE. Five hex values, and nothing else:
+     beige       #fff2d1
+     yellow      #ffc437
+     orange      #ee7a22
+     light blue  #0c75ba
+     blue        #1e386a
+
+   Every token below resolves to one of those five, to plain white, or to a
+   color-mix of two of them (tints and hairlines only — no new hues). If you
+   need a colour that is not on this list, you need a different token, not a
+   different hex.
+   ============================================================ */
+@theme {
+  /* ---- The palette, by name ---- */
+  --color-beige: #fff2d1;
+  --color-yellow: #ffc437;
+  --color-orange: #ee7a22;
+  --color-sky: #0c75ba;
+  --color-deep: #1e386a;
+
+  /* ---- Semantic aliases (what the components actually use) ---- */
+  --color-navy: #1e386a;        /* blue — dark surfaces, primary buttons */
+  --color-navy-700: #0c75ba;    /* light blue — raised step above navy */
+  --color-navy-500: #0c75ba;    /* light blue */
+  --color-blue: #0c75ba;        /* light blue — interactive, links, success */
+  --color-blue-soft: color-mix(in oklab, #0c75ba 12%, white);
+  --color-gold: #ffc437;        /* yellow — brand accent, warnings */
+  --color-gold-deep: #ee7a22;   /* orange */
+  --color-red: #ee7a22;         /* orange — denial, destructive, errors */
+  --color-red-deep: color-mix(in oklab, #ee7a22 82%, #1e386a); /* hover step */
+
+  /* Login-screen accent. Formerly a coral ramp sampled from the illustration;
+     now folded onto the palette. Steps are picked for contrast:
+       coral      decorative borders and focus rings only — never text
+       coral-600  large display text on beige       (4.0:1)
+       coral-700  button fill under white text      (9.9:1)
+       coral-800  hover step / small text and links */
+  --color-coral: #ee7a22;
+  --color-coral-600: #0c75ba;
+  --color-coral-700: #1e386a;
+  --color-coral-800: #0c75ba;
+  --color-coral-soft: #fff2d1;
+
+  --color-paper: #fff2d1;       /* beige — page field and inset fills */
+  --color-ink: #1e386a;         /* blue — body text (9.9:1 on beige) */
+  --color-ink-soft: color-mix(in oklab, #1e386a 70%, #fff2d1);  /* muted text */
+  --color-line: color-mix(in oklab, #1e386a 15%, #fff2d1);      /* hairlines */
+
+  --font-display: var(--font-display), "Bricolage Grotesque", sans-serif;
+  --font-sans: var(--font-sans), "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: var(--font-mono), "IBM Plex Mono", monospace;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  min-height: 100%;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---- Page-load reveal (staggered) ---- */
+@keyframes ncst-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.reveal {
+  opacity: 0;
+  animation: ncst-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* ---- RFID scan rings on the brand panel ---- */
+@keyframes ncst-ping {
+  0%   { transform: scale(0.35); opacity: 0.9; }
+  70%  { opacity: 0.12; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+.scan-ring {
+  animation: ncst-ping 3.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* ---- Slow drift for the halo blobs ---- */
+@keyframes ncst-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(2%, -3%) scale(1.06); }
+}
+.drift { animation: ncst-drift 14s ease-in-out infinite; }
+
+/* ---- Reader indicator light on the login illustration ----
+   The only animated element on the login page. */
+@keyframes ncst-gate-pulse {
+  0%, 100% { transform: scale(1);    opacity: 1; }
+  50%      { transform: scale(1.18); opacity: 0.72; }
+}
+.gate-pulse { animation: ncst-gate-pulse 3s ease-in-out infinite; }
+
+/* ---- Skeleton placeholders (gate terminal) ----
+   A tinted block with a light sweep across it. Both layers are white alphas so
+   the same class reads correctly on every terminal tone — ink, green, red and
+   amber all sit behind it. */
+@keyframes ncst-sweep {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.22),
+    transparent
+  );
+  animation: ncst-sweep 1.4s ease-in-out infinite;
+}
+/* Waiting for a card is not the same as waiting on the server: the idle sweep
+   is slow enough to read as ambient, so a guard can tell the two apart. */
+.skeleton-idle::after {
+  animation-duration: 2.8s;
+}
+
+/* ============================================================
+   Gate terminal — idle scan scene
+   Read from across a lobby, running unattended for hours. Motion is slow and
+   looping; nothing here flashes or demands attention.
+   ============================================================ */
+
+/* Contactless waves rippling off the reader. Staggered delays on three copies
+   read as one signal travelling outward. */
+@keyframes ncst-wave {
+  0%   { opacity: 0;    transform: scale(0.55); }
+  20%  { opacity: 0.85; }
+  100% { opacity: 0;    transform: scale(1.45); }
+}
+.gate-wave { animation: ncst-wave 3s cubic-bezier(0.2, 0, 0.2, 1) infinite; }
+
+/* The card hovers just off the reader and never lands, so the screen keeps
+   reading as "waiting". */
+@keyframes ncst-float {
+  0%, 100% { transform: translateY(0)      rotate(-7deg); }
+  50%      { transform: translateY(-13px)  rotate(-4.5deg); }
+}
+.gate-float { animation: ncst-float 6.5s ease-in-out infinite; }
+
+/* Light bar travelling down the card face. */
+@keyframes ncst-scanline {
+  0%        { transform: translateY(-140%); opacity: 0; }
+  18%, 78%  { opacity: 1; }
+  100%      { transform: translateY(340%);  opacity: 0; }
+}
+.gate-scanline { animation: ncst-scanline 3.6s ease-in-out infinite; }
+
+/* Respect users who prefer no motion */
+@media (prefers-reduced-motion: reduce) {
+  .reveal, .scan-ring, .drift, .gate-pulse,
+  .gate-wave, .gate-float, .gate-scanline {
+    animation: none;
+    opacity: 1;
+  }
+  .gate-wave { opacity: 0.3; }
+  .skeleton::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* Subtle dotted grid used behind the brand panel */
+.dot-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.14) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    border: 0;
+  }
+}

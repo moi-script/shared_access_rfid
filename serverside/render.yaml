@@ -1,0 +1,90 @@
+# Render blueprint for the NCST RFID API.
+#
+# Deploy: Render dashboard → New → Blueprint → point at this repo.
+# Values marked sync:false are NOT stored here — Render prompts for them on
+# first deploy and keeps them in the service's Environment tab. Secrets and the
+# database URI never belong in a committed file.
+services:
+  - type: web
+    name: ncst-rfid-api
+    runtime: node
+    plan: free
+    region: singapore
+    # --include=dev is load-bearing. Render applies the service's env vars to
+    # the BUILD as well as the runtime, and NODE_ENV=production makes npm skip
+    # devDependencies — which is where @types/node, @types/express,
+    # @types/bcrypt and typescript itself live. Without it the build dies in
+    # hundreds of "Cannot find name 'process'" / "Could not find a declaration
+    # file for module 'express'" errors that look like broken source but are
+    # really an empty node_modules/@types.
+    #
+    # The prune afterwards puts the runtime back to production-only, so the
+    # deployed instance carries no build tooling.
+    buildCommand: npm ci --include=dev && npm run build && npm prune --omit=dev
+    # Direct node, not `npm start`: npm swallows SIGTERM, so the graceful
+    # shutdown in src/server.ts would never run on a deploy or scale-down.
+    startCommand: node dist/server.js
+    # Render restarts the service if this stops returning 2xx. The route is
+    # public and hits no database, so it stays honest about process liveness.
+    healthCheckPath: /health
+    envVars:
+      # Render's default Node version trails the LTS line. Node 20 went EOL in
+      # April 2026, so pin forward explicitly.
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: API_PREFIX
+        value: /api
+      # Render puts exactly one proxy in front of the app. Without this the
+      # rate limiters see only the proxy's IP and throttle every user together.
+      - key: TRUST_PROXY
+        value: 1
+      # Render hosts run UTC. The server buckets attendance dates, the
+      # occupancy reset and vehicle-pass expiry in local time.
+      - key: TZ
+        value: Asia/Manila
+      # Vercel and Render are different sites, so the refresh cookie only
+      # survives as SameSite=None; Secure.
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: COOKIE_SECURE
+        value: 'true'
+      - key: JWT_ACCESS_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 7d
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 60000
+      - key: RATE_LIMIT_MAX
+        value: 200
+      - key: LOGIN_RATE_LIMIT_MAX
+        value: 10
+      - key: SCAN_RATE_LIMIT_MAX
+        value: 60
+      - key: LATE_CUTOFF_TIME
+        value: '08:00'
+      - key: OCCUPANCY_RESET_TIME
+        value: '23:00'
+      - key: SCHOOL_YEAR_END_MMDD
+        value: 03-31
+      # ---- Prompted on first deploy (see .env.production for the values) ----
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: COOKIE_SECRET
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      # The deployed frontend origin, comma-separated, no trailing slash.
+      # An origin missing from this list gets no CORS headers and the browser
+      # blocks every call from it.
+      - key: ALLOWED_ORIGINS
+        sync: false

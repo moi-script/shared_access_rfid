@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.env
+.env.production
+.env.*.local
+*.log
+.superpowers
+docs
+README.md
+.eslintrc.json

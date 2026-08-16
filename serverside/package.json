@@ -1,0 +1,59 @@
+{
+  "name": "ncst-rfid-backend",
+  "version": "1.0.0",
+  "main": "dist/server.js",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "seed": "ts-node src/config/seed.ts",
+    "seed:test": "ts-node src/config/testSeed.ts",
+    "seed:prod": "node dist/config/seed.js",
+    "seed:test:prod": "node dist/config/testSeed.js",
+    "seed:test:atlas": "node -r dotenv/config dist/config/testSeed.js dotenv_config_path=.env.production",
+    "rebuild:occupancy": "ts-node src/config/rebuildOccupancy.ts",
+    "migrate:vehicle-types": "ts-node src/config/migrateVehicleTypes.ts",
+    "grant:superadmin": "ts-node src/config/grantSuperadmin.ts",
+    "verify:roles": "ts-node src/config/verifyRoles.ts",
+    "verify:gates": "ts-node src/config/verifyGates.ts",
+    "verify:signatures": "ts-node src/config/verifySignatures.ts",
+    "verify:passback": "ts-node src/config/verifyPassback.ts",
+    "verify:vehicles": "ts-node src/config/verifyVehicles.ts",
+    "verify:gadgets": "ts-node src/config/verifyGadgets.ts",
+    "verify:registration": "ts-node src/config/verifyRegistration.ts",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.5.0",
+    "morgan": "^1.10.0",
+    "multer": "^2.2.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/cookie-parser": "^1.4.7",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/morgan": "^1.9.9",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^20.14.0",
+    "@typescript-eslint/eslint-plugin": "^7.16.0",
+    "@typescript-eslint/parser": "^7.16.0",
+    "eslint": "^8.57.0",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.5.0"
+  }
+}
