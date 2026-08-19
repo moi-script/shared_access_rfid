@@ -72,9 +72,15 @@ export default function RegisterView() {
       {lastCreated && (
         <Notice tone="info" className="text-sm text-ink">
           Registered {lastCreated.full_name}.{" "}
+          {/* login_created is false for every registration now that the form
+              stopped sending a password. The old copy here told the clerk to
+              go add a login from the Accounts tab, which would be advice to
+              undo the change — but the branch is kept, not collapsed, because
+              POST /persons still creates a login when a password is sent and
+              this Notice should stay truthful if that is ever re-armed. */}
           {lastCreated.login_created
             ? `They can sign in with ID number ${lastCreated.id_number}.`
-            : "No login was created — add one from the Accounts tab."}{" "}
+            : "They access campus by tapping their card; no sign-in is needed."}{" "}
           The form is ready for the next person.
         </Notice>
       )}

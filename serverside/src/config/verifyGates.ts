@@ -110,6 +110,70 @@ async function request(
   return { status: res.status, json };
 }
 
+interface StreamFrame {
+  event: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Opens the SSE live stream and collects frames in the background.
+ *
+ * Uses fetch + ReadableStream rather than an EventSource shim for the same
+ * reason the browser client does: the access token travels as an
+ * Authorization header, never in the URL.
+ */
+async function openStream(
+  token: string
+): Promise<{ status: number; frames: StreamFrame[]; close: () => void }> {
+  const ac = new AbortController();
+  const res = await fetch(`${BASE}/dashboard/live/stream`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: ac.signal,
+  });
+  const frames: StreamFrame[] = [];
+  if (!res.ok || !res.body) {
+    ac.abort();
+    return { status: res.status, frames, close: () => undefined };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  void (async () => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sep: number;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const raw = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          if (raw.startsWith(':')) continue; // heartbeat
+          const event = /^event: (.+)$/m.exec(raw)?.[1];
+          const data = /^data: (.+)$/m.exec(raw)?.[1];
+          if (event && data) frames.push({ event, data: JSON.parse(data) });
+        }
+      }
+    } catch {
+      // Aborted by close(), or the server went away. Either way the frames
+      // collected so far are what the assertions read.
+    }
+  })();
+
+  return { status: res.status, frames, close: () => ac.abort() };
+}
+
+/** Waits until `test` passes or the budget runs out. Returns whether it passed. */
+async function waitFor(test: () => boolean, ms = 3000): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (test()) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return test();
+}
+
 /**
  * Looks up a seeded Person by exact `id_number`, using the `?search=` param
  * (personService.list matches it against full_name and id_number) instead of
@@ -645,6 +709,114 @@ async function runChecks(): Promise<void> {
     true
   );
 
+  // GET /dashboard/live backs the Overview's "Currently inside campus" card.
+  // It counts the same occupancy rows the roster above just listed, so the two
+  // are checked against each other here: a card that disagrees with the
+  // Presence tab is the failure mode this endpoint exists to avoid.
+  const liveInside = await request(superadmin, 'GET', '/dashboard/live');
+  expectEqual('dashboard live request succeeded', liveInside.status, 200);
+  const liveData = (liveInside.json.data ?? {}) as {
+    persons_inside?: number;
+    vehicles_inside?: number;
+    recent_scans?: unknown[];
+    as_of?: string;
+  };
+  expectEqual(
+    'live count sees the vehicle that is inside',
+    (liveData.vehicles_inside ?? 0) >= 1,
+    true
+  );
+  expectEqual(
+    'live count agrees with the roster on vehicles inside',
+    liveData.vehicles_inside,
+    insideAfterRestore.filter((r) => r.entity_type === 'vehicle').length
+  );
+  expectEqual(
+    'live count agrees with the roster on persons inside',
+    liveData.persons_inside,
+    insideAfterRestore.filter((r) => r.entity_type === 'person').length
+  );
+  // The card renders `as_of` as its freshness stamp; without it the poll has
+  // no way to show that it is still running.
+  expectEqual('live payload carries a server timestamp', typeof liveData.as_of, 'string');
+  expectEqual('live payload carries recent scans', Array.isArray(liveData.recent_scans), true);
+
+  // Same gate as /occupancy. This endpoint returns occupancy plus raw scan
+  // rows — exactly the scan-derived data registrarView is defined by
+  // withholding — so a registrar token must bounce off it.
+  const liveAsRegistrar = await request(registrar, 'GET', '/dashboard/live');
+  expectEqual('registrar is denied /dashboard/live', liveAsRegistrar.status, 403);
+
+  console.log('\n== live stream: push on tap ==');
+
+  // The stream is what makes the Overview instant; polling /dashboard/live is
+  // only the fallback. These checks prove the push path actually fires, since
+  // a silently-dead stream degrades to the fallback and looks almost fine.
+  const registrarStream = await openStream(registrar);
+  expectEqual('registrar is denied the live stream', registrarStream.status, 403);
+  registrarStream.close();
+
+  const stream = await openStream(superadmin);
+  expectEqual('superadmin can open the live stream', stream.status, 200);
+  try {
+    expectEqual(
+      'the stream sends a snapshot on connect',
+      await waitFor(() => stream.frames.some((f) => f.event === 'snapshot')),
+      true
+    );
+    const snapshot = stream.frames.find((f) => f.event === 'snapshot')!.data as {
+      scan_events_today: number;
+    };
+
+    // An UNREGISTERED uid: this resolves to denied/unregistered_uid, so it
+    // writes one scan_logs row and moves no occupancy or attendance state.
+    // The point here is that ANY tap wakes the stream, not that this one is
+    // interesting.
+    const probeTap = await tap(gateKey(secondKey!), {
+      rfid_uid: 'DEADBEEF01',
+      gate_id: mainGate._id,
+      direction: 'entry',
+    });
+    expectEqual('probe tap was accepted', probeTap.status, 200);
+
+    expectEqual(
+      'a tap pushes an update frame without the client asking',
+      await waitFor(() => stream.frames.some((f) => f.event === 'update')),
+      true
+    );
+    const update = stream.frames.find((f) => f.event === 'update')!.data as {
+      scan_events_today: number;
+    };
+    expectEqual(
+      'the pushed frame carries the new scan count',
+      update.scan_events_today,
+      snapshot.scan_events_today + 1
+    );
+
+    // Coalescing is the efficiency claim, and an uncoalesced hub would still
+    // pass every check above — it would just do five times the work.
+    const before = stream.frames.filter((f) => f.event === 'update').length;
+    await Promise.all(
+      [...Array(5)].map(() =>
+        tap(gateKey(secondKey!), {
+          rfid_uid: 'DEADBEEF01',
+          gate_id: mainGate._id,
+          direction: 'entry',
+        })
+      )
+    );
+    await new Promise((r) => setTimeout(r, 1500));
+    const burstFrames = stream.frames.filter((f) => f.event === 'update').length - before;
+    expectEqual('a burst of 5 taps did push at least one frame', burstFrames >= 1, true);
+    expectEqual(
+      `a burst of 5 taps coalesced into ${burstFrames} broadcast(s), not 5`,
+      burstFrames < 5,
+      true
+    );
+  } finally {
+    stream.close();
+  }
+
   // The restored tap left the vehicle occupancy-'inside'. Release it here so
   // the next run starts clean, or the next run's earlier "granted vehicle tap
   // grants" check would fail with a stale already_inside.
@@ -654,6 +826,16 @@ async function runChecks(): Promise<void> {
     'post-restore vehicle exit releases occupancy',
     (expiryCleanupExit.json.data as { access_result?: string } | undefined)?.access_result,
     'granted'
+  );
+
+  // The count must fall as well as rise. Without this, a hardcoded or
+  // never-decrementing `vehicles_inside` would satisfy every check above.
+  const liveAfterExit = await request(superadmin, 'GET', '/dashboard/live');
+  expectEqual('dashboard live request succeeded after exit', liveAfterExit.status, 200);
+  expectEqual(
+    'the exit tap drops the live vehicle count',
+    ((liveAfterExit.json.data ?? {}) as { vehicles_inside?: number }).vehicles_inside,
+    (liveData.vehicles_inside ?? 1) - 1
   );
 
   console.log('\n== registration guards: per-type limits + cross-collection UID ==');

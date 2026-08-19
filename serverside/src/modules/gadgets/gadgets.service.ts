@@ -139,14 +139,18 @@ export const gadgetService = {
     // Two fields can put this gadget into a counted slot it was not in before:
     // status (inactive -> active) and gadget_type (moving between allowances).
     //
-    // gadget_type is inert TODAY — GADGET_TYPES has one element, so a type
-    // change cannot cross an allowance boundary. It is checked anyway because
-    // the moment a second type is added it stops being inert, and the failure
-    // mode is silent: a PATCH changing only the type on an already-active row
-    // touches neither status nor owner, so without this it would skip the
-    // allowance check entirely. That is not hypothetical — it is exactly the
-    // defect vehicles.service.update's `vehicle_type` clause was added to fix,
-    // after per-type limits made that field load-bearing.
+    // gadget_type is LIVE as of 2026-08-18. It used to be inert — GADGET_TYPES
+    // had one element, so a type change could not cross an allowance boundary —
+    // and was checked anyway against the day a second type appeared. `tablet`
+    // is that day, and this clause is now doing real work rather than standing
+    // by: laptop is capped at 1 and tablet is uncapped, so a PATCH moving an
+    // active row between them genuinely changes which allowance it consumes.
+    //
+    // The failure mode it prevents is silent: a PATCH changing only the type on
+    // an already-active row touches neither status nor owner, so without this
+    // it would skip the allowance check entirely. That is not hypothetical — it
+    // is exactly the defect vehicles.service.update's `vehicle_type` clause was
+    // added to fix, after per-type limits made that field load-bearing.
     //
     // The contrast with that four-field guard is otherwise instructive: a
     // vehicle also has a mutable owner and an expiry, two more ways to become

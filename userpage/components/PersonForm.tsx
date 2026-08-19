@@ -30,7 +30,13 @@ export default function PersonForm({
     department_section: "",
     contact_email: "",
     rfid_uid: "",
-    password: "",
+    // Logins are no longer issued at registration (2026-08-18): people do not
+    // sign in to a userpage any more, they tap a card. Commented rather than
+    // deleted so it can be re-armed — POST /persons still accepts an optional
+    // password and still creates the login when one is sent
+    // (persons.schema.ts:19, persons.service.create), so this is the only
+    // thing standing between here and logins-on-registration again.
+    // password: "",
   });
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -55,7 +61,7 @@ export default function PersonForm({
       full_name: form.full_name.trim(),
       type: form.type,
       id_number: form.id_number.trim(),
-      password: form.password,
+      // password: form.password,  // see the state note above
     };
     for (const k of ["department_section", "contact_email", "rfid_uid"] as const) {
       const v = form[k].trim();
@@ -212,7 +218,7 @@ export default function PersonForm({
         </div>
 
         <label className="block text-[13px] font-600 text-ink-soft">
-          Course / Section
+          Department
           <input
             value={form.department_section}
             onChange={(e) => set("department_section", e.target.value)}
@@ -242,22 +248,29 @@ export default function PersonForm({
           />
         </label>
 
-        <label className="block text-[13px] font-600 text-ink-soft">
-          Password — the person signs in with this and their ID number
-          <input
-            required
-            type="text"
-            minLength={8}
-            value={form.password}
-            onChange={(e) => set("password", e.target.value)}
-            placeholder="Min. 8 characters"
-            className={`mt-1 ${inputCls}`}
-          />
-          <span className="mt-1 block text-[12px] font-400 text-ink-soft">
-            Read this back to them so they can note it down. They must change it at
-            first sign-in.
-          </span>
-        </label>
+        {/*
+          Password capture, removed 2026-08-18 — registration no longer issues a
+          login. Note the `required` and `minLength={8}` below: re-arming this
+          means uncommenting the state key and the payload line too, or the
+          input binds to undefined.
+
+          <label className="block text-[13px] font-600 text-ink-soft">
+            Password — the person signs in with this and their ID number
+            <input
+              required
+              type="text"
+              minLength={8}
+              value={form.password}
+              onChange={(e) => set("password", e.target.value)}
+              placeholder="Min. 8 characters"
+              className={`mt-1 ${inputCls}`}
+            />
+            <span className="mt-1 block text-[12px] font-400 text-ink-soft">
+              Read this back to them so they can note it down. They must change it at
+              first sign-in.
+            </span>
+          </label>
+        */}
 
         <button
           type="submit"

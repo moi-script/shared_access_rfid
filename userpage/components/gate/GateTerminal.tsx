@@ -17,7 +17,7 @@ import {
 } from "@/lib/gateTerminal";
 import { reasonText } from "@/lib/reasonText";
 
-const RESET_MS = 5000;
+const RESET_MS = 750;
 const UID_RE = /^[0-9A-Fa-f]{6,32}$/;
 // A USB keyboard-wedge reader emits each of a UID's characters a few
 // milliseconds apart — far faster than a human can type. This governs only
@@ -35,8 +35,14 @@ type TapPerson = NonNullable<TapDecision["person"]>;
  * just the literal string "vehicle" there. Reading `owner_type ?? type`
  * covers both lanes with one expression instead of branching on the gate. */
 function departmentLabel(person: TapPerson): string {
-  const effectiveType = person.owner_type ?? person.type;
-  return effectiveType === "student" ? "Course & Section" : "Department";
+  // Was `student ? "Course & Section" : "Department"`. As of 2026-08-18 the
+  // field is called Department everywhere it is entered or listed, and a guard
+  // reading one name on the barrier screen and a clerk reading another in the
+  // directory is how two names for one column start to feel like two columns.
+  // `person` stays in the signature: the type-dependent choice is the thing
+  // being removed, not the ability to make one.
+  void person;
+  return "Department";
 }
 
 function RegisteredItem({ v }: { v: { vehicle_type: string; make?: string } }) {
@@ -64,6 +70,35 @@ function VehicleImage({ path, gateKey }: { path?: string; gateKey: string }) {
   );
 }
 
+/**
+ * One row of the recent-taps panel.
+ *
+ * Carries the person rather than a pre-flattened label because a DENIED tap is
+ * the row a guard most needs to read, and the old shape stored the literal
+ * string "Denied" — throwing away who had just been refused. The fields mirror
+ * what the result card shows, minus gadgets and registered vehicles: those run
+ * to several lines each and would turn a glanceable row into a paragraph.
+ */
+interface RecentEntry {
+  /** scan_time + uid: unique per tap, and stable, so React keys never reshuffle. */
+  id: string;
+  ok: boolean;
+  at: string;
+  name: string;
+  deptLabel: string | null;
+  dept: string | null;
+  photoUrl?: string;
+  /** Kept separate from photoUrl so a vehicle row can lead with the vehicle,
+   *  the way the result card does — see the thumbnail branch in the panel. */
+  vehiclePhotoUrl?: string;
+  plate?: string;
+  vehicleType?: string;
+  reason: string | null;
+}
+
+/** Newest first, and only ever this many — see the panel's comment. */
+const RECENT_LIMIT = 3;
+
 export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
   const meta = GATE_ROUTES[routeId];
   const [config, setConfig] = useState<GateConfig | null>(null);
@@ -73,7 +108,7 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
   // while the server decides, and the guard cannot tell a slow reply from a
   // card the reader never picked up.
   const [pending, setPending] = useState(false);
-  const [recent, setRecent] = useState<{ label: string; at: string; ok: boolean }[]>([]);
+  const [recent, setRecent] = useState<RecentEntry[]>([]);
 
   const busyRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -121,13 +156,27 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
 
       setOutcome(result);
       if (result.state === "granted" || result.state === "denied") {
-        const label =
-          result.state === "granted" ? result.person?.full_name ?? "Vehicle" : "Denied";
+        const p = result.person;
         setRecent((r) =>
           [
-            { label, at: new Date(result.scan_time).toLocaleTimeString(), ok: result.state === "granted" },
+            {
+              id: `${result.scan_time}:${result.rfid_uid}`,
+              ok: result.state === "granted",
+              at: new Date(result.scan_time).toLocaleTimeString(),
+              // "Unknown card" matches what the result card shows for a tap
+              // the server could not attach to anybody — most often the exact
+              // denial a guard is being asked to explain.
+              name: p?.full_name ?? "Unknown card",
+              deptLabel: p ? departmentLabel(p) : null,
+              dept: p?.department_section ?? null,
+              photoUrl: p?.photo_url,
+              vehiclePhotoUrl: p?.vehicle_photo_url,
+              plate: p?.plate_number,
+              vehicleType: p?.vehicle?.vehicle_type,
+              reason: result.reason,
+            },
             ...r,
-          ].slice(0, 5)
+          ].slice(0, RECENT_LIMIT)
         );
       }
 
@@ -407,18 +456,95 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
             )}
         </div>
 
-        <footer className="-mx-8 -mb-6 bg-ink px-8 py-3 text-sm text-white/80">
-          {recent.length === 0 ? (
-            <span>No scans yet</span>
-          ) : (
-            <div className="flex flex-wrap gap-x-6 gap-y-1">
-              {recent.map((r, i) => (
-                <span key={i}>
-                  {r.ok ? "ok" : "no"} · {r.at} · {r.label}
-                </span>
-              ))}
-            </div>
-          )}
+        {/* Recent taps. On its own navy band for the same reason the header is
+            (see above): the tone behind it changes four ways and small text
+            cannot clear 4.5:1 against the yellow and orange ones.
+
+            Capped at RECENT_LIMIT rather than scrolling. The panel exists so a
+            guard can answer "who just went through?" at a glance — a list long
+            enough to need reading is a list nobody reads at a barrier, and a
+            fixed three rows also keeps the result card's height from moving as
+            taps accumulate. Newest first, because the answer is almost always
+            the last person. */}
+        <footer className="-mx-8 -mb-6 shrink-0 bg-ink px-8 pb-7 pt-5 text-white">
+          <p className="font-mono text-sm uppercase tracking-[0.3em] text-white/45">
+            Recent
+          </p>
+          {/* Always RECENT_LIMIT slots, filled or not. The panel's height is
+              therefore constant from the first tap, so the result card above it
+              never shifts as the list fills — the jump used to happen on each of
+              the first three taps of a shift, which is precisely when a guard is
+              looking at the screen. Empty slots read as "taps appear here"
+              rather than as missing content. */}
+          <ul className="mt-4 space-y-3">
+            {Array.from({ length: RECENT_LIMIT }).map((_, slot) => {
+              const r = recent[slot];
+              if (!r) {
+                return (
+                  <li
+                    key={`empty-${slot}`}
+                    className="flex h-26 items-center rounded-2xl border border-dashed border-white/10 px-4"
+                    aria-hidden
+                  >
+                    <span className="text-xl text-white/25">
+                      {slot === 0 && recent.length === 0 ? "No scans yet" : ""}
+                    </span>
+                  </li>
+                );
+              }
+              return (
+                <li
+                  key={r.id}
+                  // Only the top slot animates; see .tap-in in globals.css.
+                  className={`flex h-26 items-center gap-5 rounded-2xl border border-white/10 bg-linear-to-b from-white/9 to-white/4 px-4 ${
+                    slot === 0 ? "tap-in" : ""
+                  }`}
+                >
+                  {/* Vehicle gates lead with the vehicle here too, matching the
+                      result card's reasoning: it is what the guard is looking
+                      at. One thumbnail, not the card's two — a second frame at
+                      this size reads as clutter rather than confirmation. */}
+                  <div className="grid h-20 w-20 shrink-0 place-items-center overflow-hidden rounded-lg bg-white/10">
+                    {meta.type === "vehicle" ? (
+                      <VehicleImage path={r.vehiclePhotoUrl} gateKey={config.key} />
+                    ) : (
+                      <PersonAvatar
+                        person={{ full_name: r.name, photo_url: r.photoUrl }}
+                        headers={{ "X-Gate-Key": config.key }}
+                      />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-3xl font-700">{r.name}</p>
+                    <p className="truncate text-lg text-white/65">
+                      {/* Same values the result card shows, in its order:
+                          department, then the vehicle, then the denial reason.
+                          Assembled by filtering so a row never renders a
+                          dangling separator when a field is absent. */}
+                      {[
+                        r.deptLabel ? `${r.deptLabel}: ${r.dept || "—"}` : null,
+                        r.vehicleType,
+                        r.plate,
+                        r.reason ? reasonText(r.reason) : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p
+                      className={`font-display text-lg font-700 uppercase tracking-[0.14em] ${
+                        r.ok ? "text-blue" : "text-red"
+                      }`}
+                    >
+                      {r.ok ? "Granted" : "Denied"}
+                    </p>
+                    <p className="font-mono text-lg text-white/55">{r.at}</p>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         </footer>
       </div>
     </main>

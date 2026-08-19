@@ -5,6 +5,8 @@ import { GadgetModel } from '../gadgets/gadgets.model';
 import { ScanLogModel } from '../scan/scan.model';
 import { GateModel } from '../gates/gates.model';
 import { AttendanceModel } from '../attendance/attendance.model';
+import { occupancyRepo } from '../occupancy/occupancy.repository';
+import { lastResetBoundary } from '../../utils/occupancyWindow';
 import { ROLES, Role } from '../../constants/roles';
 
 function startOfToday(): Date {
@@ -184,6 +186,7 @@ export const dashboardService = {
       gates,
       recent_scans,
       parking_activity,
+      inside,
     ] = await Promise.all([
       PersonModel.countDocuments({ deleted_at: null }),
       PersonModel.aggregate([
@@ -199,6 +202,7 @@ export const dashboardService = {
       gateStatuses(),
       recentScans(8),
       parkingActivity(8),
+      occupancyRepo.countInside(lastResetBoundary(new Date())),
     ]);
 
     const persons_by_type = { student: 0, staff: 0, employee: 0 };
@@ -209,6 +213,10 @@ export const dashboardService = {
     return {
       total_persons,
       persons_by_type,
+      // The dashboard's first paint carries a real occupancy number so the
+      // card never renders a dash that the poll then replaces a beat later.
+      persons_inside: inside.persons,
+      vehicles_inside: inside.vehicles,
       active_today,
       total_vehicles,
       total_gadgets,
@@ -218,6 +226,41 @@ export const dashboardService = {
       gates,
       recent_scans,
       parking_activity,
+    };
+  },
+
+  /**
+   * The volatile slice of the superadmin Overview, for polling.
+   *
+   * Deliberately NOT `adminView()`: this runs every 10 seconds per open
+   * console, so it carries only what a card tap can change and nothing that
+   * costs a per-gate query. `gateStatuses()` in particular issues one sorted
+   * scan_logs lookup PER gate, and `parkingActivity`/person counts do not move
+   * between polls — putting any of them here would turn a cheap heartbeat into
+   * the full dashboard on a timer.
+   */
+  async liveView() {
+    const today = startOfToday();
+    const [scan_events_today, granted_today, denied_today, recent_scans, inside] =
+      await Promise.all([
+        ScanLogModel.countDocuments({ scan_time: { $gte: today } }),
+        ScanLogModel.countDocuments({ scan_time: { $gte: today }, access_result: 'granted' }),
+        ScanLogModel.countDocuments({ scan_time: { $gte: today }, access_result: 'denied' }),
+        recentScans(8),
+        occupancyRepo.countInside(lastResetBoundary(new Date())),
+      ]);
+
+    return {
+      persons_inside: inside.persons,
+      vehicles_inside: inside.vehicles,
+      scan_events_today,
+      granted_today,
+      denied_today,
+      recent_scans,
+      // Stamped by the server, not the browser: a console with a skewed clock
+      // would otherwise report a "last updated" time that never matches when
+      // the data was actually read.
+      as_of: new Date(),
     };
   },
 

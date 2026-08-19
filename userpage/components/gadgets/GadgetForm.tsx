@@ -301,35 +301,27 @@ export default function GadgetForm({
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          {/* Bound to GADGET_TYPES rather than hardcoded, so it renders one
-              locked option today and needs no change when a second type is
-              added to lib/gadgetTypes.ts. */}
-          {GADGET_TYPES.length === 1 ? (
-            <label className="block text-[13px] font-600 text-ink-soft">
-              Device
-              <input
-                value={gadgetTypeLabel(GADGET_TYPES[0])}
-                disabled
-                readOnly
-                className="mt-1 w-full rounded-xl border border-line bg-paper px-3 py-2 text-ink-soft"
-              />
-            </label>
-          ) : (
-            <label className="block text-[13px] font-600 text-ink-soft">
-              Device
-              <select
-                value={form.gadget_type}
-                onChange={(e) => set("gadget_type", e.target.value)}
-                className={`mt-1 ${inputCls}`}
-              >
-                {GADGET_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {gadgetTypeLabel(t)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          {/* Bound to GADGET_TYPES rather than hardcoded. This used to branch
+              on `GADGET_TYPES.length === 1` to render a single locked option;
+              `tablet` (2026-08-18) made that branch not merely dead but
+              untypeable — on an `as const` tuple `.length` is the literal `2`,
+              so tsc rejects the comparison against `1` outright. Restoring a
+              one-type build means deleting the select, not restoring a
+              condition. */}
+          <label className="block text-[13px] font-600 text-ink-soft">
+            Device
+            <select
+              value={form.gadget_type}
+              onChange={(e) => set("gadget_type", e.target.value)}
+              className={`mt-1 ${inputCls}`}
+            >
+              {GADGET_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {gadgetTypeLabel(t)}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="block text-[13px] font-600 text-ink-soft">
             Brand and model
             <input
@@ -360,9 +352,11 @@ export default function GadgetForm({
         <PhotoCapture onChange={setPhoto} />
 
         <p className="text-[12px] text-ink-soft">
-          {limit === 1
-            ? "One active device per person. If they already have one, deactivate it first."
-            : `Up to ${limit} active devices of this kind per person.`}
+          {!Number.isFinite(limit)
+            ? "No limit on active devices of this kind per person."
+            : limit === 1
+              ? "One active device per person. If they already have one, deactivate it first."
+              : `Up to ${limit} active devices of this kind per person.`}
         </p>
 
         <button

@@ -1,18 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { apiGetList, apiPost, apiUpload } from "@/lib/auth";
+import { apiGet, apiGetBlob, apiGetList, apiPost, apiUpload } from "@/lib/auth";
 import PhotoCapture from "@/components/PhotoCapture";
 import { VEHICLE_TYPES, VEHICLE_LIMITS } from "@/lib/vehicleTypes";
 import Notice from "@/components/Notice";
 import type { IconType } from "react-icons";
 import {
   TfiCar,
-  TfiIdBadge,
-  TfiKey,
+  // Icons for the LTO / Ownership / Authorization sections, commented out
+  // with their sections below.
+  // TfiIdBadge,
+  // TfiKey,
+  // TfiWrite,
   TfiLayersAlt,
   TfiUser,
-  TfiWrite,
 } from "react-icons/tfi";
 
 const inputCls =
@@ -30,6 +32,22 @@ interface OwnerHit {
   // only to decide whether to offer an owner-photo capture below — a face
   // already on file does not need recapturing.
   photo_url?: string;
+  // The only contact detail the Person record carries. School year and mobile
+  // number are NOT on it; they come from a prior application. See lookup().
+  contact_email?: string;
+}
+
+/** The fields a previous application can supply that the Person record cannot. */
+interface PriorApplication {
+  school_year?: string;
+  mobile_no?: string;
+  email?: string;
+}
+
+/** Enough of the owner's existing vehicles to match a plate and find its photo. */
+interface PriorVehicle {
+  _id: string;
+  plate_number: string;
 }
 
 interface FormState {
@@ -73,6 +91,11 @@ interface FormState {
   rfid_uid: string;
 }
 
+// FormState and EMPTY_FORM deliberately keep every key, including the ones the
+// form no longer renders (2026-08-18 simplification). The hidden fields stay ""
+// and are skipped by the OPTIONAL_KEYS loop in submit(), so nothing junk is
+// sent — and the commented-out inputs below still typecheck the moment anyone
+// uncomments them.
 const EMPTY_FORM: FormState = {
   category: "new",
   applicant_type: "student",
@@ -107,7 +130,9 @@ const EMPTY_FORM: FormState = {
 };
 
 // Sent only when non-blank — the backend rejects empty strings for fields it
-// declared optional, and most of a real paper form is blank.
+// declared optional, and most of a real paper form is blank. Every field the
+// simplified form stopped rendering also lands here by staying blank, which is
+// why they simply drop out of the payload rather than needing removal.
 const OPTIONAL_KEYS = [
   "year_level",
   "tel_no",
@@ -122,60 +147,76 @@ const OPTIONAL_KEYS = [
   "relationship",
   "driver_name",
   "driver_license_no",
-] as const satisfies readonly (keyof FormState)[];
-
-const REQUIRED_KEYS = [
-  "id_number",
+  // Moved out of REQUIRED_KEYS by the 2026-08-18 simplification. The server
+  // relaxed these to .optional() to match; see vehicleApplications.schema.ts.
   "last_name",
   "first_name",
   "middle_name",
+  "permanent_address",
+  "make",
+  "signed_name",
+  "signed_date",
+] as const satisfies readonly (keyof FormState)[];
+
+// What the clerk actually fills in, plus registered_owner_name, which is not
+// typed but derived from the resolved person (see lookup()) and still required
+// by the server.
+const REQUIRED_KEYS = [
+  "id_number",
   "school_year",
   "email",
   "mobile_no",
-  "permanent_address",
   "plate_no",
-  "make",
   "registered_owner_name",
-  "signed_name",
-  "signed_date",
   "rfid_uid",
 ] as const satisfies readonly (keyof FormState)[];
 
-/**
+/*
+ * Signature capture left the form on 2026-08-18. toPngBlob is kept commented
+ * rather than deleted because the applicationSignatures module, the
+ * POST /vehicle-applications/:id/signature route, and every signature already
+ * on file are all still live — only this form stopped feeding them.
+ *
  * Re-encodes whatever image the clerk picked (a phone photo of the signed
  * paper, a scanned PNG, anything createImageBitmap can decode) through a
  * canvas as a PNG blob. The server checks the PNG magic bytes, not
  * Content-Type, so round-tripping through canvas.toBlob("image/png") is what
  * guarantees a real PNG regardless of the source file's format — the same
  * "encode through canvas" approach PhotoCapture.tsx already uses for photos.
+ *
+ * async function toPngBlob(file: File): Promise<Blob> {
+ *   const bitmap = await createImageBitmap(file);
+ *   try {
+ *     const canvas = document.createElement("canvas");
+ *     canvas.width = bitmap.width;
+ *     canvas.height = bitmap.height;
+ *     const ctx = canvas.getContext("2d");
+ *     if (!ctx) throw new Error("Canvas is unavailable in this browser");
+ *     ctx.drawImage(bitmap, 0, 0);
+ *     return await new Promise<Blob>((resolve, reject) => {
+ *       canvas.toBlob(
+ *         (blob) => (blob ? resolve(blob) : reject(new Error("Could not encode the signature"))),
+ *         "image/png"
+ *       );
+ *     });
+ *   } finally {
+ *     bitmap.close();
+ *   }
+ * }
  */
-async function toPngBlob(file: File): Promise<Blob> {
-  const bitmap = await createImageBitmap(file);
-  try {
-    const canvas = document.createElement("canvas");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas is unavailable in this browser");
-    ctx.drawImage(bitmap, 0, 0);
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (blob) => (blob ? resolve(blob) : reject(new Error("Could not encode the signature"))),
-        "image/png"
-      );
-    });
-  } finally {
-    bitmap.close();
-  }
-}
 
 function normalize(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function Optional() {
-  return <span className="ml-1 font-500 normal-case text-ink-soft/60">(optional)</span>;
-}
+/*
+ * Used only by fields the simplified form no longer renders — every field it
+ * still shows is required. Kept for whoever uncomments one of them.
+ *
+ * function Optional() {
+ *   return <span className="ml-1 font-500 normal-case text-ink-soft/60">(optional)</span>;
+ * }
+ */
 
 function Section({
   title,
@@ -202,6 +243,8 @@ interface CreatedApplication {
   vehicle: { _id: string; plate_number: string; valid_until: string; status: string };
 }
 
+type LookupState = "idle" | "searching" | "found" | "none";
+
 export default function VehicleApplicationForm({
   onCreated,
   onClose,
@@ -211,21 +254,33 @@ export default function VehicleApplicationForm({
 }) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
 
-  // Owner search — same debounced generation-ref pattern AccountsView uses so
-  // a slow first keystroke's response can never clobber a faster later one.
-  const [ownerQuery, setOwnerQuery] = useState("");
-  const [ownerResults, setOwnerResults] = useState<OwnerHit[]>([]);
+  // The applicant is resolved from the ID number rather than searched by name.
+  // A vehicle application cannot exist without owner_person_id, so every
+  // applicant is already a person — there is no "new applicant" path here.
   const [owner, setOwner] = useState<OwnerHit | null>(null);
-  const [searching, setSearching] = useState(false);
+  const [lookup, setLookup] = useState<LookupState>("idle");
+  // Same debounced generation-ref pattern the name search used (and AccountsView
+  // still uses) so a slow early response can never clobber a faster later one.
   const gen = useRef(0);
 
-  const [signatureFile, setSignatureFile] = useState<File | null>(null);
-  const [signaturePreview, setSignaturePreview] = useState<string | null>(null);
+  /*
+   * Signature state, commented out with the capture UI below.
+   *
+   * const [signatureFile, setSignatureFile] = useState<File | null>(null);
+   * const [signaturePreview, setSignaturePreview] = useState<string | null>(null);
+   */
 
   // Both uploaded AFTER the application POST returns — the vehicle id does not
   // exist until then. See submit().
   const [vehiclePhoto, setVehiclePhoto] = useState<Blob | null>(null);
   const [ownerPhoto, setOwnerPhoto] = useState<Blob | null>(null);
+
+  // Renewal photo reuse: the plate the photo came from, an object URL for the
+  // preview, and whether the clerk chose to override it with a fresh capture.
+  const [reusedFromPlate, setReusedFromPlate] = useState<string | null>(null);
+  const [reusedPhotoUrl, setReusedPhotoUrl] = useState<string | null>(null);
+  const [retakePhoto, setRetakePhoto] = useState(false);
+  const photoGen = useRef(0);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -235,28 +290,94 @@ export default function VehicleApplicationForm({
     setForm((f) => ({ ...f, [k]: v }));
   }
 
+  function clearReusedPhoto() {
+    setReusedFromPlate(null);
+    setReusedPhotoUrl((old) => {
+      if (old) URL.revokeObjectURL(old);
+      return null;
+    });
+  }
+
+  /**
+   * Resolve the applicant from the ID number, then fill what is blank.
+   *
+   * Two hops, because one is not enough: the Person record carries only
+   * full_name / id_number / department_section / contact_email. School year and
+   * mobile number live ONLY on prior applications, so a person-only lookup
+   * would leave half the contact block empty on a returning applicant.
+   *
+   * Fills blanks only. Anything the clerk has already typed wins, which is what
+   * makes it safe to re-run every time the ID number changes.
+   * registered_owner_name is the exception: it is derived, never typed, so it
+   * always tracks the resolved person.
+   */
   useEffect(() => {
-    // Every state update below happens inside the timeout callback (or the
-    // fetch it kicks off), never synchronously in the effect body — this is
-    // the debounce itself, not just a stylistic echo of AccountsView's.
+    // Every setState below runs inside the timeout callback or the fetch it
+    // starts, never synchronously in the effect body — this is the debounce
+    // itself, not a stylistic echo of it.
     const mine = ++gen.current;
+    const raw = form.id_number.trim();
     const t = setTimeout(() => {
-      if (owner || !ownerQuery.trim()) {
-        if (mine === gen.current) setOwnerResults([]);
+      if (!raw) {
+        if (mine === gen.current) {
+          setOwner(null);
+          setLookup("idle");
+        }
         return;
       }
-      if (mine === gen.current) setSearching(true);
-      apiGetList<OwnerHit>(`/persons?search=${encodeURIComponent(ownerQuery.trim())}&limit=8`)
-        .then(({ items }) => {
-          if (mine !== gen.current) return; // a newer search started; discard this result
-          setOwnerResults(items);
+      if (mine === gen.current) setLookup("searching");
+      apiGetList<OwnerHit>(`/persons?search=${encodeURIComponent(raw)}&limit=8`)
+        .then(async ({ items }) => {
+          if (mine !== gen.current) return; // a newer lookup started
+          // Exact match only. `search` is a partial match, so "2025-000" would
+          // otherwise resolve to whichever student happened to sort first.
+          const hit = items.find((p) => normalize(p.id_number) === normalize(raw)) ?? null;
+          if (!hit) {
+            setOwner(null);
+            setLookup("none");
+            return;
+          }
+          setOwner(hit);
+          setLookup("found");
+          setForm((f) => ({
+            ...f,
+            registered_owner_name: hit.full_name,
+            email: f.email.trim() ? f.email : (hit.contact_email ?? ""),
+          }));
+
+          // Hop 2 carries its OWN catch rather than sharing the outer one.
+          // Sharing it would make a failed prior-application read
+          // indistinguishable from a failed person lookup, and the outer
+          // handler clears `owner` — so a returning applicant whose history
+          // happened to fail to load would silently lose the person the form
+          // had already resolved.
+          try {
+            const { items: apps } = await apiGetList<PriorApplication>(
+              `/vehicle-applications?owner_person_id=${hit._id}&limit=1`
+            );
+            if (mine !== gen.current) return;
+            const prior = apps[0];
+            if (!prior) return; // first-time applicant: nothing to carry over
+            setForm((f) => ({
+              ...f,
+              school_year: f.school_year.trim() ? f.school_year : (prior.school_year ?? ""),
+              mobile_no: f.mobile_no.trim() ? f.mobile_no : (prior.mobile_no ?? ""),
+              email: f.email.trim() ? f.email : (prior.email ?? ""),
+            }));
+          } catch {
+            // Ordinary: a first-time applicant has no history, and a failed
+            // read only costs the clerk some typing. The person is resolved
+            // either way, so this is not worth an error banner.
+          }
         })
         .catch(() => {
+          // Person lookup failed. Clearing `owner` matters as much as the
+          // message: submit() sends owner._id, so a stale person from the
+          // previous ID number would file the application against the wrong
+          // human.
           if (mine !== gen.current) return;
-          setOwnerResults([]);
-        })
-        .finally(() => {
-          if (mine === gen.current) setSearching(false);
+          setOwner(null);
+          setLookup("none");
         });
     }, 250);
     return () => {
@@ -267,57 +388,74 @@ export default function VehicleApplicationForm({
       // eslint-disable-next-line react-hooks/exhaustive-deps
       gen.current++;
     };
-  }, [ownerQuery, owner]);
+  }, [form.id_number]);
 
-  function selectOwner(o: OwnerHit) {
-    setOwner(o);
-    setOwnerQuery(o.full_name);
-    setOwnerResults([]);
-  }
+  /**
+   * Reuse the vehicle photo when renewing a plate the person already holds.
+   *
+   * Matched on PLATE, not vehicle type. Two cars owned by one person share a
+   * type but are not the same vehicle, and the photo's whole job is to show the
+   * guard the vehicle actually at the barrier — inheriting the other car's
+   * picture would defeat it.
+   */
+  useEffect(() => {
+    const mine = ++photoGen.current;
+    const plate = form.plate_no.trim().toUpperCase();
+    const ownerId = owner?._id;
+    const isRenewal = form.category === "renewal";
+    const t = setTimeout(() => {
+      if (!isRenewal || !ownerId || !plate) {
+        if (mine === photoGen.current) clearReusedPhoto();
+        return;
+      }
+      apiGet<{ vehicles: PriorVehicle[] }>(`/persons/${ownerId}/overview`)
+        .then(async ({ vehicles }) => {
+          if (mine !== photoGen.current) return;
+          const match = vehicles.find((v) => v.plate_number.trim().toUpperCase() === plate);
+          if (!match) {
+            clearReusedPhoto();
+            return;
+          }
+          // 404 here is an ordinary state, not an error: the old vehicle simply
+          // has no photo on file. The catch below falls back to capture.
+          const blob = await apiGetBlob(`/vehicles/${match._id}/photo`);
+          if (mine !== photoGen.current) return;
+          setVehiclePhoto(blob);
+          setReusedFromPlate(match.plate_number);
+          setRetakePhoto(false);
+          setReusedPhotoUrl((old) => {
+            if (old) URL.revokeObjectURL(old);
+            return URL.createObjectURL(blob);
+          });
+        })
+        .catch(() => {
+          if (mine === photoGen.current) clearReusedPhoto();
+        });
+    }, 300);
+    return () => {
+      clearTimeout(t);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      photoGen.current++;
+    };
+  }, [form.category, form.plate_no, owner]);
 
-  function clearOwner() {
-    setOwner(null);
-    setOwnerQuery("");
-  }
-
-  function handleSignature(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] ?? null;
-    setSignaturePreview((old) => {
-      if (old) URL.revokeObjectURL(old);
-      return file ? URL.createObjectURL(file) : null;
-    });
-    setSignatureFile(file);
-  }
+  // Object URLs outlive the component unless revoked. Mirrors the same cleanup
+  // the signature preview used to do.
+  useEffect(() => {
+    return () => {
+      if (reusedPhotoUrl) URL.revokeObjectURL(reusedPhotoUrl);
+    };
+  }, [reusedPhotoUrl]);
 
   function resetForm() {
     setForm(EMPTY_FORM);
-    clearOwner();
-    setSignatureFile(null);
-    setSignaturePreview((old) => {
-      if (old) URL.revokeObjectURL(old);
-      return null;
-    });
+    setOwner(null);
+    setLookup("idle");
     setVehiclePhoto(null);
     setOwnerPhoto(null);
+    setRetakePhoto(false);
+    clearReusedPhoto();
   }
-
-  // Discrepancy flags between what the clerk typed and the selected person's
-  // own record — informational only, per the design: the paper is the
-  // record, and a mismatch is for a human to notice, not for the form to
-  // silently normalise away. Name comparison is a loose substring check
-  // because Person.full_name and the paper's Last/First/Middle split are not
-  // guaranteed to share a single canonical order.
-  const idMismatch =
-    !!owner && !!form.id_number.trim() && normalize(form.id_number) !== normalize(owner.id_number);
-  const nameMismatch =
-    !!owner &&
-    !!(form.last_name.trim() || form.first_name.trim()) &&
-    (() => {
-      const target = normalize(owner.full_name);
-      const last = normalize(form.last_name);
-      const first = normalize(form.first_name);
-      return (last && !target.includes(last)) || (first && !target.includes(first));
-    })();
 
   const requiredFilled = REQUIRED_KEYS.every((k) => form[k].trim().length > 0) && !!owner;
 
@@ -326,7 +464,7 @@ export default function VehicleApplicationForm({
     setError(null);
     setSuccess(null);
     if (!owner) {
-      setError("Search for and select the applicant before submitting.");
+      setError("Enter the applicant's ID number and wait for their record to load.");
       return;
     }
     setSaving(true);
@@ -345,34 +483,37 @@ export default function VehicleApplicationForm({
 
       const created = await apiPost<CreatedApplication>("/vehicle-applications", payload);
 
-      // Signature goes to the application id the server just returned,
-      // matching the server's own write ordering (application, then
-      // signature, then vehicle already exists by the time we're here).
-      if (signatureFile) {
-        try {
-          const png = await toPngBlob(signatureFile);
-          const fd = new FormData();
-          fd.append("signature", png, "signature.png");
-          await apiUpload(`/vehicle-applications/${created.application._id}/signature`, fd);
-        } catch (sigErr) {
-          // The application and vehicle already exist and grant access; a
-          // failed signature upload must not read as a failed registration.
-          setError(
-            `Registered ${created.vehicle.plate_number}, but the signature did not upload: ${
-              (sigErr as Error).message
-            }`
-          );
-          resetForm();
-          onCreated(created.vehicle);
-          return;
-        }
-      }
+      /*
+       * Signature upload, commented out with the capture UI. It went to the
+       * application id the server had just returned, matching the server's own
+       * write ordering (application, then signature, then vehicle already
+       * exists by the time we're here).
+       *
+       * if (signatureFile) {
+       *   try {
+       *     const png = await toPngBlob(signatureFile);
+       *     const fd = new FormData();
+       *     fd.append("signature", png, "signature.png");
+       *     await apiUpload(`/vehicle-applications/${created.application._id}/signature`, fd);
+       *   } catch (sigErr) {
+       *     // The application and vehicle already exist and grant access; a
+       *     // failed signature upload must not read as a failed registration.
+       *     setError(
+       *       `Registered ${created.vehicle.plate_number}, but the signature did not upload: ${
+       *         (sigErr as Error).message
+       *       }`
+       *     );
+       *     resetForm();
+       *     onCreated(created.vehicle);
+       *     return;
+       *   }
+       * }
+       */
 
       // Photos upload AFTER the create, because the vehicle id does not exist
       // until the server returns it. A failure here is reported but never
       // rolls anything back: the pass is already valid, and revoking gate
-      // access over a missing image is the worse failure. Same posture as the
-      // signature block above.
+      // access over a missing image is the worse failure.
       const photoFailures: string[] = [];
       if (vehiclePhoto) {
         try {
@@ -421,9 +562,8 @@ export default function VehicleApplicationForm({
     <form onSubmit={submit} className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-ink-soft">
-          Transcribe the signed paper application. Fields marked{" "}
-          <span className="font-500 text-ink-soft/70">(optional)</span> may stay blank exactly as
-          they are on the form.
+          Enter the applicant&apos;s ID number first — their name and contact details fill in from
+          their record.
         </p>
         <button
           type="button"
@@ -490,7 +630,9 @@ export default function VehicleApplicationForm({
               ))}
             </select>
             <span className="mt-1 block text-[12px] font-400 text-ink-soft">
-              Limit: {VEHICLE_LIMITS[form.vehicle_type]} active per person
+              {Number.isFinite(VEHICLE_LIMITS[form.vehicle_type])
+                ? `Limit: ${VEHICLE_LIMITS[form.vehicle_type]} active per person`
+                : "No limit per person"}
             </span>
           </label>
         </div>
@@ -498,66 +640,90 @@ export default function VehicleApplicationForm({
 
       {/* Applicant */}
       <Section title="Applicant" icon={TfiUser}>
-        <div className="relative">
+        <div className="grid gap-3 sm:grid-cols-2">
           <label className="block text-[13px] font-600 text-ink-soft">
-            Owner — search by name or ID number
+            ID number
             <input
               required
-              value={ownerQuery}
+              value={form.id_number}
               onChange={(e) => {
+                // Drop the resolved person SYNCHRONOUSLY, the way the old owner
+                // search did on every keystroke. The lookup below is debounced,
+                // so without this there is a window where the ID number reads
+                // as one person while `owner` still points at the previous one
+                // — and submit() would file the application against `owner`.
+                // requiredFilled gates on `owner`, so clearing it also disables
+                // the submit button until the new ID resolves.
                 setOwner(null);
-                setOwnerQuery(e.target.value);
+                setForm((f) => ({
+                  ...f,
+                  id_number: e.target.value,
+                  registered_owner_name: "",
+                }));
               }}
-              placeholder="Start typing to search the directory…"
+              placeholder="e.g. 2025-0001"
+              className={`mt-1 ${inputCls}`}
+            />
+            {lookup === "searching" && (
+              <span className="mt-1 block text-[12px] font-400 text-ink-soft">
+                Looking up this ID number…
+              </span>
+            )}
+            {lookup === "none" && (
+              <span className="mt-1 block text-[12px] font-400 text-ink">
+                No person with that ID number. They must exist in the directory before a vehicle can
+                be registered to them.
+              </span>
+            )}
+          </label>
+
+          <div className="block text-[13px] font-600 text-ink-soft">
+            Owner
+            <div
+              className={`mt-1 flex min-h-[42px] items-center rounded-xl border border-line px-3 py-2 text-[14px] ${
+                owner ? "bg-paper text-ink" : "bg-paper/50 text-ink-soft"
+              }`}
+            >
+              {owner ? (
+                <span>
+                  <span className="font-600">{owner.full_name}</span>{" "}
+                  <span className="text-ink-soft">· {owner.type}</span>
+                </span>
+              ) : (
+                "Fills in from the ID number"
+              )}
+            </div>
+          </div>
+
+          <label className="block text-[13px] font-600 text-ink-soft">
+            School year
+            <input
+              required
+              value={form.school_year}
+              onChange={(e) => set("school_year", e.target.value)}
+              placeholder="e.g. 26-27"
               className={`mt-1 ${inputCls}`}
             />
           </label>
-          {owner && (
-            <p className="mt-1 flex items-center gap-2 text-[12px] text-ink-soft">
-              Selected: <span className="font-600 text-ink">{owner.full_name}</span> (
-              {owner.id_number})
-              <button
-                type="button"
-                onClick={clearOwner}
-                className="font-600 text-blue hover:underline"
-              >
-                Change
-              </button>
-            </p>
-          )}
-          {!owner && (searching || ownerResults.length > 0) && ownerQuery.trim() && (
-            <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-line bg-white shadow-lg">
-              {searching && ownerResults.length === 0 && (
-                <li className="px-3 py-2 text-[13px] text-ink-soft">Searching…</li>
-              )}
-              {ownerResults.map((o) => (
-                <li key={o._id}>
-                  <button
-                    type="button"
-                    onClick={() => selectOwner(o)}
-                    className="block w-full px-3 py-2 text-left text-[13px] hover:bg-paper"
-                  >
-                    <span className="font-600 text-ink">{o.full_name}</span>{" "}
-                    <span className="text-ink-soft">
-                      · {o.id_number} · {o.type}
-                    </span>
-                  </button>
-                </li>
-              ))}
-              {!searching && ownerResults.length === 0 && (
-                <li className="px-3 py-2 text-[13px] text-ink-soft">No matches.</li>
-              )}
-            </ul>
-          )}
-          {(idMismatch || nameMismatch) && (
-            <Notice tone="warn" compact className="mt-2 text-[12px] text-ink">
-              What was typed below doesn&apos;t match the selected person&apos;s record
-              {idMismatch ? " (ID number differs)" : ""}
-              {idMismatch && nameMismatch ? " and" : ""}
-              {nameMismatch ? " (name differs)" : ""}. The paper form is the record — submitting
-              is still allowed; this is only a flag for a human to check.
-            </Notice>
-          )}
+          <label className="block text-[13px] font-600 text-ink-soft">
+            Email
+            <input
+              required
+              type="email"
+              value={form.email}
+              onChange={(e) => set("email", e.target.value)}
+              className={`mt-1 ${inputCls}`}
+            />
+          </label>
+          <label className="block text-[13px] font-600 text-ink-soft">
+            Mobile no.
+            <input
+              required
+              value={form.mobile_no}
+              onChange={(e) => set("mobile_no", e.target.value)}
+              className={`mt-1 ${inputCls}`}
+            />
+          </label>
         </div>
 
         {/* Only when there is no face on file. Recapturing one the gate can
@@ -570,26 +736,15 @@ export default function VehicleApplicationForm({
           </div>
         )}
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block text-[13px] font-600 text-ink-soft">
-            ID number
-            <input
-              required
-              value={form.id_number}
-              onChange={(e) => set("id_number", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            School year
-            <input
-              required
-              value={form.school_year}
-              onChange={(e) => set("school_year", e.target.value)}
-              placeholder="e.g. 26-27"
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
+        {/*
+          Name parts, year level, tel no. and permanent address were removed on
+          2026-08-18. The applicant is resolved from the ID number now, so the
+          name is read from their record rather than transcribed, and the
+          mismatch warnings that used to sit here compared the typed name and ID
+          against that same record — a comparison that cannot fail once the
+          record IS the source. The server relaxed last_name/first_name to
+          optional to match.
+
           <label className="block text-[13px] font-600 text-ink-soft">
             Last name
             <input
@@ -628,25 +783,6 @@ export default function VehicleApplicationForm({
             />
           </label>
           <label className="block text-[13px] font-600 text-ink-soft">
-            Email
-            <input
-              required
-              type="email"
-              value={form.email}
-              onChange={(e) => set("email", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            Mobile no.
-            <input
-              required
-              value={form.mobile_no}
-              onChange={(e) => set("mobile_no", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
             Tel no.
             <Optional />
             <input
@@ -664,7 +800,7 @@ export default function VehicleApplicationForm({
               className={`mt-1 ${inputCls}`}
             />
           </label>
-        </div>
+        */}
       </Section>
 
       {/* Vehicle */}
@@ -679,6 +815,57 @@ export default function VehicleApplicationForm({
               className={`mt-1 font-mono ${inputCls}`}
             />
           </label>
+          <label className="block text-[13px] font-600 text-ink-soft">
+            RFID UID (hex) — scan the sticker&apos;s card now
+            <input
+              required
+              value={form.rfid_uid}
+              onChange={(e) => set("rfid_uid", e.target.value)}
+              placeholder="e.g. A3F19C24"
+              className={`mt-1 font-mono ${inputCls}`}
+            />
+          </label>
+
+          <div className="block text-[13px] font-600 text-ink-soft sm:col-span-2">
+            Vehicle photo — shown to the guard at the barrier
+            {reusedPhotoUrl && !retakePhoto ? (
+              <div className="mt-1 flex items-start gap-3 rounded-xl border border-line bg-paper p-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={reusedPhotoUrl}
+                  alt={`Existing photo for ${reusedFromPlate}`}
+                  className="h-20 w-32 shrink-0 rounded-lg border border-line bg-white object-contain"
+                />
+                <div className="space-y-1">
+                  <p className="text-[12px] font-400 text-ink">
+                    Reusing the photo already on file for{" "}
+                    <span className="font-600">{reusedFromPlate}</span>.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRetakePhoto(true);
+                      setVehiclePhoto(null);
+                    }}
+                    className="text-[12px] font-600 text-blue hover:underline"
+                  >
+                    Take a new photo instead
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <PhotoCapture onChange={setVehiclePhoto} />
+            )}
+          </div>
+        </div>
+
+        {/*
+          MV file no., make, model, year and colour were removed on 2026-08-18.
+          A vehicle is identified by plate, type and photo now. `make` was
+          required server-side and was relaxed to optional to match; every
+          reader of make/vehicle_model/color was already null-guarded, so they
+          simply render nothing when absent.
+
           <label className="block text-[13px] font-600 text-ink-soft">
             MV file no.
             <Optional />
@@ -724,165 +911,160 @@ export default function VehicleApplicationForm({
               className={`mt-1 ${inputCls}`}
             />
           </label>
-          <label className="block text-[13px] font-600 text-ink-soft sm:col-span-2">
-            RFID UID (hex) — scan the sticker&apos;s card now
-            <input
-              required
-              value={form.rfid_uid}
-              onChange={(e) => set("rfid_uid", e.target.value)}
-              placeholder="e.g. A3F19C24"
-              className={`mt-1 font-mono ${inputCls}`}
-            />
-          </label>
-          <div className="block text-[13px] font-600 text-ink-soft sm:col-span-2">
-            Vehicle photo — shown to the guard at the barrier
-            <PhotoCapture onChange={setVehiclePhoto} />
-          </div>
-        </div>
+        */}
       </Section>
 
-      {/* LTO */}
-      <Section title="LTO" icon={TfiIdBadge}>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block text-[13px] font-600 text-ink-soft">
-            CR no.
-            <Optional />
-            <input
-              value={form.lto_cr_no}
-              onChange={(e) => set("lto_cr_no", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            CR date
-            <Optional />
-            <input
-              type="date"
-              value={form.lto_cr_date}
-              onChange={(e) => set("lto_cr_date", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            OR no.
-            <Optional />
-            <input
-              value={form.lto_or_no}
-              onChange={(e) => set("lto_or_no", e.target.value)}
-              placeholder="~"
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            OR date
-            <Optional />
-            <input
-              type="date"
-              value={form.lto_or_date}
-              onChange={(e) => set("lto_or_date", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-        </div>
-      </Section>
+      {/*
+        The LTO, Ownership and Authorization sections were removed on
+        2026-08-18. Their fields were already optional server-side except
+        registered_owner_name (still sent, derived from the resolved person's
+        full_name) and signed_name / signed_date (relaxed to optional).
 
-      {/* Ownership */}
-      <Section title="Ownership" icon={TfiKey}>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block text-[13px] font-600 text-ink-soft">
-            Registered owner name
-            <input
-              required
-              value={form.registered_owner_name}
-              onChange={(e) => set("registered_owner_name", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            Relationship to applicant
-            <Optional />
-            <input
-              value={form.relationship}
-              onChange={(e) => set("relationship", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            Driver name
-            <Optional />
-            <input
-              value={form.driver_name}
-              onChange={(e) => set("driver_name", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            Driver&apos;s license no.
-            <Optional />
-            <input
-              value={form.driver_license_no}
-              onChange={(e) => set("driver_license_no", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-        </div>
-      </Section>
+        Signature capture went with the Authorization section. The
+        applicationSignatures module, POST /vehicle-applications/:id/signature,
+        and every signature already on file remain live — only this form stopped
+        feeding them. toPngBlob and the upload block are commented out above.
 
-      {/* Authorization */}
-      <Section title="Authorization" icon={TfiWrite}>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block text-[13px] font-600 text-ink-soft">
-            Signed name
-            <input
-              required
-              value={form.signed_name}
-              onChange={(e) => set("signed_name", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            Signed date
-            <input
-              required
-              type="date"
-              value={form.signed_date}
-              onChange={(e) => set("signed_date", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            />
-          </label>
-        </div>
-
-        <div className="rounded-xl border border-line bg-paper p-3">
-          <p className="mb-2 text-[13px] font-600 text-ink-soft">
-            Signature <span className="font-500 normal-case text-ink-soft/60">(optional)</span>
-          </p>
-          <div className="flex items-start gap-3">
-            <div className="grid h-20 w-40 shrink-0 place-items-center overflow-hidden rounded-lg border border-line bg-white text-[11px] text-ink-soft">
-              {signaturePreview ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={signaturePreview}
-                  alt="Signature preview"
-                  className="h-full w-full object-contain"
-                />
-              ) : (
-                "No signature"
-              )}
-            </div>
-            <div className="space-y-1">
+        <Section title="LTO" icon={TfiIdBadge}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-[13px] font-600 text-ink-soft">
+              CR no.
+              <Optional />
               <input
-                type="file"
-                accept="image/*"
-                onChange={handleSignature}
-                className="text-[13px] text-ink-soft file:mr-3 file:rounded-lg file:border file:border-line file:bg-white file:px-3 file:py-1.5 file:text-[13px] file:font-600 file:text-ink-soft"
+                value={form.lto_cr_no}
+                onChange={(e) => set("lto_cr_no", e.target.value)}
+                className={`mt-1 ${inputCls}`}
               />
-              <p className="text-[11px] text-ink-soft">
-                Upload a photo or scan of the signed paper. Stored as PNG.
-              </p>
+            </label>
+            <label className="block text-[13px] font-600 text-ink-soft">
+              CR date
+              <Optional />
+              <input
+                type="date"
+                value={form.lto_cr_date}
+                onChange={(e) => set("lto_cr_date", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              />
+            </label>
+            <label className="block text-[13px] font-600 text-ink-soft">
+              OR no.
+              <Optional />
+              <input
+                value={form.lto_or_no}
+                onChange={(e) => set("lto_or_no", e.target.value)}
+                placeholder="~"
+                className={`mt-1 ${inputCls}`}
+              />
+            </label>
+            <label className="block text-[13px] font-600 text-ink-soft">
+              OR date
+              <Optional />
+              <input
+                type="date"
+                value={form.lto_or_date}
+                onChange={(e) => set("lto_or_date", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              />
+            </label>
+          </div>
+        </Section>
+
+        <Section title="Ownership" icon={TfiKey}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-[13px] font-600 text-ink-soft">
+              Registered owner name
+              <input
+                required
+                value={form.registered_owner_name}
+                onChange={(e) => set("registered_owner_name", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              />
+            </label>
+            <label className="block text-[13px] font-600 text-ink-soft">
+              Relationship to applicant
+              <Optional />
+              <input
+                value={form.relationship}
+                onChange={(e) => set("relationship", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              />
+            </label>
+            <label className="block text-[13px] font-600 text-ink-soft">
+              Driver name
+              <Optional />
+              <input
+                value={form.driver_name}
+                onChange={(e) => set("driver_name", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              />
+            </label>
+            <label className="block text-[13px] font-600 text-ink-soft">
+              Driver&apos;s license no.
+              <Optional />
+              <input
+                value={form.driver_license_no}
+                onChange={(e) => set("driver_license_no", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              />
+            </label>
+          </div>
+        </Section>
+
+        <Section title="Authorization" icon={TfiWrite}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-[13px] font-600 text-ink-soft">
+              Signed name
+              <input
+                required
+                value={form.signed_name}
+                onChange={(e) => set("signed_name", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              />
+            </label>
+            <label className="block text-[13px] font-600 text-ink-soft">
+              Signed date
+              <input
+                required
+                type="date"
+                value={form.signed_date}
+                onChange={(e) => set("signed_date", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              />
+            </label>
+          </div>
+
+          <div className="rounded-xl border border-line bg-paper p-3">
+            <p className="mb-2 text-[13px] font-600 text-ink-soft">
+              Signature <span className="font-500 normal-case text-ink-soft/60">(optional)</span>
+            </p>
+            <div className="flex items-start gap-3">
+              <div className="grid h-20 w-40 shrink-0 place-items-center overflow-hidden rounded-lg border border-line bg-white text-[11px] text-ink-soft">
+                {signaturePreview ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={signaturePreview}
+                    alt="Signature preview"
+                    className="h-full w-full object-contain"
+                  />
+                ) : (
+                  "No signature"
+                )}
+              </div>
+              <div className="space-y-1">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleSignature}
+                  className="text-[13px] text-ink-soft file:mr-3 file:rounded-lg file:border file:border-line file:bg-white file:px-3 file:py-1.5 file:text-[13px] file:font-600 file:text-ink-soft"
+                />
+                <p className="text-[11px] text-ink-soft">
+                  Upload a photo or scan of the signed paper. Stored as PNG.
+                </p>
+              </div>
             </div>
           </div>
-        </div>
-      </Section>
+        </Section>
+      */}
 
       <button
         type="submit"

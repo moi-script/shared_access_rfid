@@ -4,7 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import { apiGet, getStoredUser } from "@/lib/auth";
 import ProfileView, { InfoBanner, type PersonOverview } from "@/components/ProfileView";
 import RegistrationForm, { type PersonRecord } from "@/components/RegistrationForm";
-import DeletePersonDialog from "@/components/DeletePersonDialog";
+// Unused while the profile's Delete button is commented out; the component file
+// itself is left in place.
+// import DeletePersonDialog from "@/components/DeletePersonDialog";
 import GadgetForm from "@/components/gadgets/GadgetForm";
 import { canRegisterGadgets } from "@/lib/permissions";
 import type { Role } from "@/lib/auth";
@@ -22,10 +24,12 @@ export default function PersonProfile({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [showDelete, setShowDelete] = useState(false);
-  // Delete is superadmin-only in the UI; the server enforces this
-  // regardless (personRoutes.delete is authorize(ROLES.SUPERADMIN)).
-  const isSuperadmin = getStoredUser()?.role === "superadmin";
+  // Commented out with the Delete button below; kept for re-arming. isSuperadmin
+  // had no other reader in this file, so it is parked here rather than left unused.
+  // const [showDelete, setShowDelete] = useState(false);
+  // // Delete is superadmin-only in the UI; the server enforces this
+  // // regardless (personRoutes.delete is authorize(ROLES.SUPERADMIN)).
+  // const isSuperadmin = getStoredUser()?.role === "superadmin";
   const [showGadget, setShowGadget] = useState(false);
   const myRole = (getStoredUser()?.role ?? "staff") as Role;
   const canGadget = canRegisterGadgets(myRole);
@@ -82,6 +86,7 @@ export default function PersonProfile({
                 Register device
               </button>
             )}
+            {/* Delete button — see the note by the DeletePersonDialog mount below.
             {isSuperadmin && (
               <button
                 onClick={() => setShowDelete(true)}
@@ -90,6 +95,7 @@ export default function PersonProfile({
                 Delete
               </button>
             )}
+            */}
           </div>
         )}
       </div>
@@ -102,6 +108,17 @@ export default function PersonProfile({
         <RegistrationForm person={record} onClose={() => setShowForm(false)} />
       )}
 
+      {/*
+        Delete was removed from the profile by request, matching the directory
+        table. It is commented out rather than deleted so it can be re-armed in
+        one edit: nothing underneath it changed. DeletePersonDialog,
+        persons.service.softDelete with its vehicle/gadget/login cascade and
+        card block, and the superadmin-only DELETE /persons/:id route are all
+        still live. With the directory's button also commented out, this was the
+        last Delete entry point in the UI — DeletePersonDialog now has no
+        importer and is kept deliberately, not by accident.
+      */}
+      {/*
       {showDelete && record && (
         <DeletePersonDialog
           personId={personId}
@@ -115,6 +132,7 @@ export default function PersonProfile({
           }}
         />
       )}
+      */}
 
       {showGadget && record && (
         <GadgetForm

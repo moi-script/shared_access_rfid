@@ -10,6 +10,7 @@ export const VEHICLE_TYPES = [
   "pickup",
   "auv",
   "truck",
+  "car",
 ] as const;
 
 export type VehicleType = (typeof VEHICLE_TYPES)[number];
@@ -22,4 +23,8 @@ export const VEHICLE_LIMITS: Record<VehicleType, number> = {
   pickup: 3,
   auv: 1,
   truck: 1,
+  // Uncapped by decision — mirrors the server, where assertWithinLimit's
+  // `used >= limit` can never be true for Infinity. See the fuller note in
+  // serverside/src/constants/vehicleTypes.ts before changing this.
+  car: Number.POSITIVE_INFINITY,
 };

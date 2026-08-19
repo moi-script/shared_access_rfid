@@ -11,23 +11,58 @@ export interface AuthUser {
 }
 
 /**
- * NEXT_PUBLIC_* values are inlined into the bundle at BUILD time, not read at
- * runtime — so a production build made without this variable ships a client
- * that points every request at the developer's own machine. That failure is
- * invisible until a real user opens the site and nothing loads. Fail the build
- * instead: a deploy that stops is cheaper than one that silently doesn't work.
+ * Where the client sends its API calls.
+ *
+ * Deriving from the page's own origin is the DEFAULT, not an opt-in, because
+ * the normal case for this project is a source tree copied onto a USB drive
+ * and run on a PC whose LAN address nobody knows until the router assigns it.
+ * Requiring a variable to be set there means the app is broken on arrival at
+ * every new machine, and broken in a way that looks like a server outage
+ * rather than a config gap. The Express API runs on the same PC that serves
+ * this app, one port over, so the page's own hostname is always the right
+ * answer: opened at localhost:5173 the API is localhost:3000, opened at
+ * 192.168.1.35:5173 from the gate terminal it is 192.168.1.35:3000.
+ *
+ * Resolution order:
+ *
+ * 1. NEXT_PUBLIC_API_BASE_URL — absolute override. The only correct answer
+ *    when the API is NOT on the machine serving this page: the Vercel +
+ *    Render split, or the nginx/rfid.lab LAN setup where the API is proxied
+ *    onto port 443 instead of 3000.
+ *
+ * 2. The browser's own origin, with the API port swapped in. Needs no
+ *    configuration at all — it works with .env.local absent entirely.
+ *
+ * 3. No window (SSR and prerender). Those run ON the API machine, so loopback
+ *    is correct; the browser recomputes case 2 when this module loads
+ *    client-side, so nothing derived here reaches a user.
  */
 function resolveApiBase(): string {
   const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   if (configured) return configured.replace(/\/+$/, "");
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "NEXT_PUBLIC_API_BASE_URL is not set. A production build needs the deployed " +
-        "API origin (e.g. https://ncst-rfid-api.onrender.com/api) at build time; " +
-        "set it in the Vercel project's Environment Variables and redeploy.",
-    );
+
+  const port = process.env.NEXT_PUBLIC_API_PORT?.trim() || "3000";
+
+  if (typeof window === "undefined") {
+    // Vercel sets VERCEL=1 for every build it runs. There the API is on a
+    // different host by definition, so deriving cannot be right and a missing
+    // variable is a genuine deploy mistake — one that would otherwise ship a
+    // bundle calling https://<the-app>.vercel.app:3000 and fail for real
+    // users. Nothing else can distinguish that build from a self-hosted one,
+    // since NODE_ENV is "production" for both. Fail the deploy instead.
+    if (process.env.VERCEL) {
+      throw new Error(
+        "NEXT_PUBLIC_API_BASE_URL is not set. A Vercel build needs the deployed " +
+          "API origin (e.g. https://ncst-rfid-api.onrender.com/api) at build time; " +
+          "set it in the project's Environment Variables and redeploy. Self-hosted " +
+          "builds need nothing — they derive the API from the page's own origin.",
+      );
+    }
+    return `http://localhost:${port}/api`;
   }
-  return "http://localhost:3000/api";
+
+  const { protocol, hostname } = window.location;
+  return `${protocol}//${hostname}:${port}/api`;
 }
 
 export const API_BASE = resolveApiBase();

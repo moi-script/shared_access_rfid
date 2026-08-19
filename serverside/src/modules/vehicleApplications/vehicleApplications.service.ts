@@ -27,8 +27,14 @@ export interface CreateApplicationInput {
   vehicle_type: VehicleType;
   owner_person_id: string;
   id_number: string;
-  last_name: string;
-  first_name: string;
+  // These five are optional as of 2026-08-18, matching createApplicationSchema.
+  // This interface is hand-maintained rather than inferred from the zod schema,
+  // so relaxing the schema alone does NOT relax it — the two must be edited
+  // together or a field the validator now allows to be absent still reads as
+  // guaranteed here. That mismatch is exactly how `new Date(input.signed_date)`
+  // below turned into `new Date(undefined)`.
+  last_name?: string;
+  first_name?: string;
   middle_name?: string;
   year_level?: string;
   school_year: string;
@@ -44,14 +50,14 @@ export interface CreateApplicationInput {
   lto_or_date?: string;
   plate_no: string;
   mv_file_no?: string;
-  make: string;
+  make?: string;
   model?: string;
   year?: string;
   color?: string;
   registered_owner_name: string;
   relationship?: string;
-  signed_name: string;
-  signed_date: string;
+  signed_name?: string;
+  signed_date?: string;
   rfid_uid: string;
   valid_until?: string;
 }
@@ -153,7 +159,11 @@ export const vehicleApplicationService = {
       vehicle_model: model,
       lto_cr_date: input.lto_cr_date ? new Date(input.lto_cr_date) : undefined,
       lto_or_date: input.lto_or_date ? new Date(input.lto_or_date) : undefined,
-      signed_date: new Date(input.signed_date),
+      // Guarded like the two LTO dates above. Unguarded, an absent signed_date
+      // becomes `new Date(undefined)` — an Invalid Date that Mongoose casts to
+      // null on a good day and throws on otherwise. `undefined` simply omits
+      // the field, which is what an unsigned application means.
+      signed_date: input.signed_date ? new Date(input.signed_date) : undefined,
       created_by: new Types.ObjectId(actor.id),
     });
 

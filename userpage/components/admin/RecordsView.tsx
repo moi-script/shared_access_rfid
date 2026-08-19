@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE, apiGet, getToken } from "@/lib/auth";
+import { subscribeLive, type LiveStatus } from "@/lib/liveStream";
 import { reasonText } from "@/lib/reasonText";
 import Notice from "@/components/Notice";
 import { TfiReload } from "react-icons/tfi";
@@ -63,6 +64,11 @@ export default function RecordsView() {
   const [accessResult, setAccessResult] = useState("");
   const [page, setPage] = useState(1);
 
+  const [streamStatus, setStreamStatus] = useState<LiveStatus>("connecting");
+  // Taps that arrived while auto-refresh was paused. Counted rather than
+  // applied, so the reader decides when the table moves under them.
+  const [heldBack, setHeldBack] = useState(0);
+
   // A counter, not a boolean: a filter change (or Refresh) can fire a new
   // request while an earlier one is still in flight. Without this, a
   // first-requested/last-arriving reply overwrites fresher data — the same
@@ -119,6 +125,12 @@ export default function RecordsView() {
       setRows(body.data);
       setPagination(body.meta.pagination);
       setTruncated(body.meta.truncated);
+      // Any completed load — auto, manual, filter change, page change — makes
+      // a held-back count meaningless: whatever it was counting is either on
+      // screen now or does not match the current filters. Clearing it here
+      // rather than in an effect keeps "the badge is stale" impossible by
+      // construction.
+      setHeldBack(0);
     } catch (err) {
       if (mine !== gen.current) return;
       const e = err as Error & { status?: number };
@@ -144,6 +156,53 @@ export default function RecordsView() {
       gen.current++;
     };
   }, [load]);
+
+  /**
+   * Auto-refresh is only safe on the first page of a still-open range.
+   *
+   * A new tap shifts every row down by one. On page 3 that silently swaps the
+   * rows out from under whoever is reading them, and against a closed date
+   * range (`to` set) the incoming tap does not even belong in the result — the
+   * table would reload to show exactly what it already showed. Both cases hold
+   * the update instead and offer it, which is why `heldBack` is a count and
+   * not a boolean.
+   */
+  const autoRefreshable = page === 1 && !to;
+
+  // Read through a ref inside the subscription: the handler must see the
+  // CURRENT eligibility and loader without the subscription itself tearing
+  // down and reconnecting the shared stream every time a filter changes.
+  const liveRef = useRef({ autoRefreshable, load });
+  useEffect(() => {
+    liveRef.current = { autoRefreshable, load };
+  }, [autoRefreshable, load]);
+
+  useEffect(() => {
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const stop = subscribeLive(
+      (e) => {
+        if (e.type !== "update") return; // the snapshot is just current state
+        if (!liveRef.current.autoRefreshable) {
+          setHeldBack((n) => n + 1);
+          return;
+        }
+        // The server already coalesces a tap burst into roughly one frame per
+        // 250ms; this second, shorter debounce covers the case where several
+        // frames still land back to back, so /logs is queried once for them.
+        if (debounce) clearTimeout(debounce);
+        debounce = setTimeout(() => void liveRef.current.load(), 150);
+      },
+      (st) => {
+        setStreamStatus(st);
+        if (st === "unauthorized") router.replace("/login");
+      },
+    );
+    return () => {
+      if (debounce) clearTimeout(debounce);
+      stop();
+    };
+  }, [router]);
+
 
   function setFilter<T>(setter: (v: T) => void) {
     return (v: T) => {
@@ -239,14 +298,52 @@ export default function RecordsView() {
           </select>
         </label>
 
-        <button
-          onClick={() => void load()}
-          disabled={loading}
-          className="ml-auto flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-[13px] font-600 text-ink-soft transition hover:border-navy/40 hover:text-navy disabled:opacity-50"
-        >
-          <TfiReload aria-hidden className="h-3 w-3" />
-          {loading ? "Refreshing…" : "Refresh"}
-        </button>
+        <div className="ml-auto flex items-center gap-3">
+          <span className="flex items-center gap-1.5 text-[12px] text-ink-soft">
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                streamStatus === "reconnecting"
+                  ? "bg-red"
+                  : streamStatus === "open" && autoRefreshable
+                    ? "bg-blue"
+                    : "bg-ink-soft/40"
+              }`}
+            />
+            {streamStatus === "reconnecting"
+              ? "Reconnecting"
+              : streamStatus !== "open"
+                ? "Connecting"
+                : autoRefreshable
+                  ? "Live"
+                  : to
+                    ? "Paused · closed date range"
+                    : `Paused · page ${page}`}
+          </span>
+
+          {heldBack > 0 && (
+            <button
+              onClick={() => {
+                // Page 1 is the only place the new taps can appear. If we are
+                // already there, load() alone does it — setPage would not
+                // change state and so would not retrigger the load effect.
+                if (page === 1) void load();
+                else setPage(1);
+              }}
+              className="rounded-full border border-blue bg-blue/25 px-3 py-1 text-[12px] font-600 text-ink transition hover:bg-blue/40"
+            >
+              {heldBack} new {heldBack === 1 ? "tap" : "taps"} — show
+            </button>
+          )}
+
+          <button
+            onClick={() => void load()}
+            disabled={loading}
+            className="flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-[13px] font-600 text-ink-soft transition hover:border-navy/40 hover:text-navy disabled:opacity-50"
+          >
+            <TfiReload aria-hidden className="h-3 w-3" />
+            {loading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {!loading && truncated && (

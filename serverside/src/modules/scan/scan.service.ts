@@ -12,6 +12,7 @@ import { env } from '../../config/env';
 import { occupancyRepo } from '../occupancy/occupancy.repository';
 import { lastResetBoundary } from '../../utils/occupancyWindow';
 import { parseLocalDateRange } from '../../utils/dateRange';
+import { liveHub } from '../dashboard/liveHub';
 
 interface TapInput {
   rfid_uid: string;
@@ -442,6 +443,14 @@ export const scanService = {
         await attendanceRepo.upsertTimeOut(String(attendancePersonId), key, scan_time);
       }
     }
+
+    // Wakes every connected Overview/Records console. Deliberately the LAST
+    // thing before the return and deliberately not awaited: it schedules a
+    // broadcast rather than performing one, so the person standing at the
+    // barrier never waits on a dashboard query. Placed here, after the log and
+    // attendance writes, so a console that reacts instantly still reads a
+    // database that already has this tap in it.
+    liveHub.notifyScan();
 
     return { access_result, reason, scan_time, person: personView };
   },

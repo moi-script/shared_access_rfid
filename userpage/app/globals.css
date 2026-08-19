@@ -166,10 +166,28 @@ body {
 }
 .gate-scanline { animation: ncst-scanline 3.6s ease-in-out infinite; }
 
+/* ---- Recent-tap row entrance (gate terminal) ----
+   Only the newest row animates. Each row is keyed by scan time + UID, so a tap
+   mounts a fresh node at the top while the rows beneath keep their identity and
+   stay perfectly still — the list reads as one row arriving, not three redrawing.
+   It enters from ABOVE because that is where it is inserted; sliding up would
+   contradict the order.
+
+   Shares .reveal's cubic-bezier so the terminal speaks one motion language, but
+   runs at 0.42s rather than 0.7s: this fires on every tap, and a page-load
+   flourish repeated forty times an hour becomes a stutter. */
+@keyframes ncst-tap-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.tap-in {
+  animation: ncst-tap-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 /* Respect users who prefer no motion */
 @media (prefers-reduced-motion: reduce) {
   .reveal, .scan-ring, .drift, .gate-pulse,
-  .gate-wave, .gate-float, .gate-scanline {
+  .gate-wave, .gate-float, .gate-scanline, .tap-in {
     animation: none;
     opacity: 1;
   }

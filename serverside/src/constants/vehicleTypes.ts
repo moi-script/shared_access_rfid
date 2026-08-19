@@ -18,6 +18,7 @@ export const VEHICLE_TYPES = [
   'pickup',
   'auv',
   'truck',
+  'car',
 ] as const;
 
 export type VehicleType = (typeof VEHICLE_TYPES)[number];
@@ -39,6 +40,11 @@ export const VEHICLE_LIMITS: Record<VehicleType, number> = {
   pickup: 3,
   auv: 1,
   truck: 1,
+  // Deliberately uncapped, not a number nobody chose. assertWithinLimit
+  // (vehicles.service.ts) tests `used >= limit`, and a finite count is never
+  // >= Infinity, so the CONFLICT branch cannot fire for a car. Do not "fix"
+  // this to an integer without first deciding what the real cap should be.
+  car: Number.POSITIVE_INFINITY,
 };
 
 /** Plural for an error message: 1 van, 3 vans. */

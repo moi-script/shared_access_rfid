@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { env } from './config/env';
+import { corsOrigin } from './config/cors';
 import { requestLogger } from './middlewares/requestLogger';
 import { globalLimiter } from './middlewares/rateLimiter';
 import { notFound } from './middlewares/notFound';
@@ -35,7 +36,7 @@ export function createApp(): Express {
   app.use(helmet());
   app.use(
     cors({
-      origin: env.ALLOWED_ORIGINS_LIST,
+      origin: corsOrigin,
       credentials: true,
     })
   );

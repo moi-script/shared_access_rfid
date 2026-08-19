@@ -5,7 +5,9 @@ import { apiGet, apiGetList, apiGetBlob, getStoredUser } from "@/lib/auth";
 import PersonForm from "@/components/PersonForm";
 import PersonEditForm from "@/components/PersonEditForm";
 import ReplaceCardDialog from "@/components/ReplaceCardDialog";
-import DeletePersonDialog from "@/components/DeletePersonDialog";
+// Unused while the directory's Delete button is commented out; the component
+// itself is still live and used by PersonProfile.
+// import DeletePersonDialog from "@/components/DeletePersonDialog";
 import RestorePersonDialog from "@/components/RestorePersonDialog";
 import RegistrationForm, { type PersonRecord } from "@/components/RegistrationForm";
 import ImportPersons from "@/components/ImportPersons";
@@ -52,7 +54,8 @@ export default function StudentsDirectory({
   const [printPerson, setPrintPerson] = useState<PersonRecord | null>(null);
   const [editPerson, setEditPerson] = useState<Person | null>(null);
   const [cardPerson, setCardPerson] = useState<Person | null>(null);
-  const [deletePerson, setDeletePerson] = useState<Person | null>(null);
+  // Unused while the Delete button above is commented out; kept for re-arming.
+  // const [deletePerson, setDeletePerson] = useState<Person | null>(null);
   const [restorePerson, setRestorePerson] = useState<Person | null>(null);
 
   // Delete and restore are superadmin-only in the UI; the server enforces
@@ -267,7 +270,7 @@ export default function StudentsDirectory({
                   <th className="py-2 font-600">Name</th>
                   <th className="py-2 font-600">ID number</th>
                   <th className="py-2 font-600">Type</th>
-                  <th className="py-2 font-600">Course / Section</th>
+                  <th className="py-2 font-600">Department</th>
                   <th className="py-2 font-600">Status</th>
                   <th className="py-2 font-600">Actions</th>
                 </tr>
@@ -323,6 +326,7 @@ export default function StudentsDirectory({
                           >
                             Replace card
                           </button>
+                          {/* Delete button — see the note by the DeletePersonDialog mount below.
                           {isSuperadmin && (
                             <button
                               type="button"
@@ -335,6 +339,7 @@ export default function StudentsDirectory({
                               Delete
                             </button>
                           )}
+                          */}
                           <span className="text-ink-soft">View →</span>
                         </div>
                       </td>
@@ -443,6 +448,16 @@ export default function StudentsDirectory({
           }}
         />
       )}
+      {/*
+        Delete was removed from the directory table by request. It is commented
+        out rather than deleted so it can be re-armed in one edit: nothing
+        underneath it changed. DeletePersonDialog, persons.service.softDelete
+        with its vehicle/gadget/login cascade and card block, and the
+        superadmin-only DELETE /persons/:id route are all still live, and Delete
+        is still reachable from a person's profile page. This hides the
+        row-level entry point, nothing more.
+      */}
+      {/*
       {deletePerson && (
         <DeletePersonDialog
           personId={deletePerson._id}
@@ -457,6 +472,7 @@ export default function StudentsDirectory({
           }}
         />
       )}
+      */}
       {restorePerson && (
         <RestorePersonDialog
           personId={restorePerson._id}

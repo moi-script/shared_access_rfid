@@ -159,7 +159,7 @@ export default function PersonEditForm({
         </div>
 
         <label className="block text-[13px] font-600 text-ink-soft">
-          Course / Section
+          Department
           <input
             value={form.department_section}
             onChange={(e) => set("department_section", e.target.value)}

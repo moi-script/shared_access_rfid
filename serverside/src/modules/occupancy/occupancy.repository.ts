@@ -105,6 +105,29 @@ export const occupancyRepo = {
   },
 
   /**
+   * How many entities are inside right now, split by type.
+   *
+   * Deliberately shares `listInside`'s filter — same `state` and the same
+   * `since >= boundary` staleness rule. The dashboard's live count and the
+   * Presence roster are two views of one answer, and an admin who sees "14
+   * inside" on the Overview and then counts 13 rows on the Presence tab has
+   * no way to tell which one lied. If the roster's filter ever changes, this
+   * one changes with it.
+   */
+  async countInside(boundary: Date): Promise<{ persons: number; vehicles: number }> {
+    const rows = await OccupancyModel.aggregate<{ _id: EntityType; count: number }>([
+      { $match: { state: 'inside', since: { $gte: boundary } } },
+      { $group: { _id: '$entity_type', count: { $sum: 1 } } },
+    ]);
+    const counts = { persons: 0, vehicles: 0 };
+    for (const row of rows) {
+      if (row._id === 'person') counts.persons = row.count;
+      else if (row._id === 'vehicle') counts.vehicles = row.count;
+    }
+    return counts;
+  },
+
+  /**
    * The presence roster. Applies the same staleness rule as `enter`, so a
    * stranded row never shows up as somebody standing on campus.
    */

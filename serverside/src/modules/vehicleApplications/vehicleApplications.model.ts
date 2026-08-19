@@ -15,8 +15,10 @@ export interface IVehicleApplication extends Document {
 
   // Applicant snapshot — frozen as written on the paper
   id_number: string;
-  last_name: string;
-  first_name: string;
+  // Optional since 2026-08-18: the reduced form resolves the applicant from
+  // id_number rather than typed name parts. Older rows still carry them.
+  last_name?: string;
+  first_name?: string;
   middle_name?: string;
   year_level?: string;
   school_year: string; // "26-27"
@@ -38,7 +40,7 @@ export interface IVehicleApplication extends Document {
   // Vehicle
   plate_no: string;
   mv_file_no?: string;
-  make: string;
+  make?: string;
   // Named `vehicle_model`, not `model`: a bare `model` property collides with
   // mongoose Document's own `.model()` method and fails to typecheck. Mirrors
   // the name Vehicle already uses for the same value and the same reason
@@ -52,9 +54,10 @@ export interface IVehicleApplication extends Document {
   registered_owner_name: string;
   relationship?: string;
 
-  // Authorization
-  signed_name: string;
-  signed_date: Date;
+  // Authorization — optional since signature capture left the form; rows
+  // written before then keep both values.
+  signed_name?: string;
+  signed_date?: Date;
 
   created_by: Types.ObjectId; // ref User — the OSS clerk
   createdAt: Date;
@@ -77,8 +80,8 @@ const vehicleApplicationSchema = new Schema<IVehicleApplication>(
     vehicle_id: { type: Schema.Types.ObjectId, ref: 'Vehicle', default: null },
 
     id_number: { type: String, required: true },
-    last_name: { type: String, required: true },
-    first_name: { type: String, required: true },
+    last_name: { type: String },
+    first_name: { type: String },
     middle_name: { type: String },
     year_level: { type: String },
     school_year: { type: String, required: true, index: true },
@@ -97,7 +100,7 @@ const vehicleApplicationSchema = new Schema<IVehicleApplication>(
 
     plate_no: { type: String, required: true, index: true },
     mv_file_no: { type: String },
-    make: { type: String, required: true },
+    make: { type: String },
     vehicle_model: { type: String },
     year: { type: String },
     color: { type: String },
@@ -105,8 +108,8 @@ const vehicleApplicationSchema = new Schema<IVehicleApplication>(
     registered_owner_name: { type: String, required: true },
     relationship: { type: String },
 
-    signed_name: { type: String, required: true },
-    signed_date: { type: Date, required: true },
+    signed_name: { type: String },
+    signed_date: { type: Date },
 
     created_by: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },

@@ -1,11 +1,25 @@
 "use client";
 
-import { TfiPieChart, TfiPulse, TfiServer, TfiUser } from "react-icons/tfi";
+import { TfiLocationPin, TfiPieChart, TfiPulse, TfiServer } from "react-icons/tfi";
 import SectionHeading from "@/components/SectionHeading";
 import StatTile from "@/components/StatTile";
-import { STATS, fmtDateTime, type AdminDashboard } from "./types";
+import { STATS, fmtClock, fmtDateTime, type AdminDashboard } from "./types";
+import { useLiveOverview } from "./useLiveOverview";
 
 export default function OverviewView({ data }: { data: AdminDashboard }) {
+  const { live, status } = useLiveOverview();
+
+  // Every field below exists in both payloads, so the poll substitutes for the
+  // mount-time fetch one field at a time. `??` rather than `live ? ... : ...`
+  // so a zero from a live poll is still a zero and not a fallback to a stale
+  // count — the moment the last person taps out is exactly when this matters.
+  const persons_inside = live?.persons_inside ?? data?.persons_inside;
+  const vehicles_inside = live?.vehicles_inside ?? data?.vehicles_inside;
+  const granted_today = live?.granted_today ?? data?.granted_today;
+  const denied_today = live?.denied_today ?? data?.denied_today;
+  const recent_scans = live?.recent_scans ?? data?.recent_scans;
+  const scan_events_today = live?.scan_events_today ?? data?.scan_events_today;
+
   return (
     <>
       {/* Column count tracks STATS.length — five tiles in a four-column grid
@@ -15,7 +29,16 @@ export default function OverviewView({ data }: { data: AdminDashboard }) {
           <StatTile
             key={s.key}
             label={s.label}
-            value={data ? data[s.key] : undefined}
+            // Only the scan counter moves between polls; the registered-person,
+            // vehicle and device totals change when somebody registers one,
+            // which /dashboard/live deliberately does not re-query.
+            value={
+              s.key === "scan_events_today"
+                ? scan_events_today
+                : data
+                  ? data[s.key]
+                  : undefined
+            }
             icon={s.icon}
           />
         ))}
@@ -27,7 +50,7 @@ export default function OverviewView({ data }: { data: AdminDashboard }) {
           <div className="mt-3 flex gap-6">
             <div>
               <p className="font-display text-3xl font-700 text-blue">
-                {data?.granted_today ?? "—"}
+                {granted_today ?? "—"}
               </p>
               <p className="text-[13px] text-ink-soft">Granted</p>
             </div>
@@ -37,26 +60,61 @@ export default function OverviewView({ data }: { data: AdminDashboard }) {
                   large-text floor. */}
               <p
                 className={`font-display text-3xl font-700 text-ink ${
-                  data && data.denied_today > 0
+                  denied_today !== undefined && denied_today > 0
                     ? "underline decoration-red decoration-4 underline-offset-4"
                     : ""
                 }`}
               >
-                {data?.denied_today ?? "—"}
+                {denied_today ?? "—"}
               </p>
               <p className="text-[13px] text-ink-soft">Denied</p>
             </div>
           </div>
-          <GrantedBar granted={data?.granted_today ?? 0} denied={data?.denied_today ?? 0} />
+          <GrantedBar granted={granted_today ?? 0} denied={denied_today ?? 0} />
         </section>
 
         <section className="rounded-2xl border border-line bg-white p-5">
-          <SectionHeading icon={TfiUser}>Persons by type</SectionHeading>
-          <div className="mt-3 grid grid-cols-3 gap-3 text-center">
-            <TypePill label="Students" value={data?.persons_by_type.student} />
-            <TypePill label="Staff" value={data?.persons_by_type.staff} />
-            <TypePill label="Employees" value={data?.persons_by_type.employee} />
+          <SectionHeading icon={TfiLocationPin}>Currently inside campus</SectionHeading>
+          <div className="mt-3 flex items-end gap-6">
+            <div>
+              <p className="font-display text-4xl font-700 leading-none text-ink">
+                {persons_inside ?? "—"}
+              </p>
+              <p className="mt-1.5 text-[13px] text-ink-soft">
+                {persons_inside === 1 ? "person" : "persons"}
+              </p>
+            </div>
+            <div className="border-l border-line pl-6">
+              <p className="font-display text-2xl font-700 leading-none text-ink-soft">
+                {vehicles_inside ?? "—"}
+              </p>
+              <p className="mt-1.5 text-[13px] text-ink-soft">
+                {vehicles_inside === 1 ? "vehicle" : "vehicles"}
+              </p>
+            </div>
           </div>
+          {/* The dot must tell the truth about the transport, not just show
+              a heartbeat: an admin staring at an unchanging count during an
+              evacuation needs to know whether the campus is empty or the feed
+              is down. */}
+          <p className="mt-4 flex items-center gap-1.5 text-[12px] text-ink-soft">
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                status === "open"
+                  ? "bg-blue"
+                  : status === "reconnecting"
+                    ? "bg-red"
+                    : "bg-ink-soft/40"
+              }`}
+            />
+            {status === "reconnecting"
+              ? live
+                ? `Reconnecting · last update ${fmtClock(live.as_of)}`
+                : "Reconnecting…"
+              : live
+                ? `updated ${fmtClock(live.as_of)}`
+                : "Connecting…"}
+          </p>
         </section>
       </div>
 
@@ -109,10 +167,16 @@ export default function OverviewView({ data }: { data: AdminDashboard }) {
 
       <section className="rounded-2xl border border-line bg-white p-5">
         <SectionHeading icon={TfiPulse}>Recent scan activity</SectionHeading>
-        {data && data.recent_scans.length > 0 ? (
+        {recent_scans && recent_scans.length > 0 ? (
           <ul className="mt-3 divide-y divide-line/60">
-            {data.recent_scans.map((s, i) => (
-              <li key={i} className="flex items-center justify-between gap-3 py-2.5 text-[14px]">
+            {/* Keyed by the scan itself, not by index: the list is repopulated
+                every poll, and an index key makes React rewrite each row in
+                place instead of retiring the one that fell off the end. */}
+            {recent_scans.map((s) => (
+              <li
+                key={`${s.scan_time}-${s.rfid_uid}-${s.direction}`}
+                className="flex items-center justify-between gap-3 py-2.5 text-[14px]"
+              >
                 <div className="min-w-0">
                   <p className="truncate font-600 text-ink">
                     {s.name ?? <span className="font-mono text-ink-soft">{s.rfid_uid}</span>}
@@ -158,15 +222,6 @@ function GrantedBar({ granted, denied }: { granted: number; denied: number }) {
       <p className="mt-1.5 text-[12px] text-ink-soft">
         {total > 0 ? `${Math.round(pct)}% granted` : "No scans today"}
       </p>
-    </div>
-  );
-}
-
-function TypePill({ label, value }: { label: string; value?: number }) {
-  return (
-    <div className="rounded-xl bg-paper py-3">
-      <p className="font-display text-2xl font-700 text-ink">{value ?? "—"}</p>
-      <p className="text-[12px] text-ink-soft">{label}</p>
     </div>
   );
 }

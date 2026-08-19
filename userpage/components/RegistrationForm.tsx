@@ -86,7 +86,7 @@ export default function RegistrationForm({
           </div>
 
           <div className="mt-4 grid gap-x-8 sm:grid-cols-2">
-            <Field label="Course / Section" value={person.department_section} />
+            <Field label="Department" value={person.department_section} />
             <Field label="Email" value={person.contact_email} />
             <Field
               label="RFID UID"

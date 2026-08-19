@@ -15,6 +15,19 @@ const envSchema = z.object({
   ADMIN_USERNAME: z.string().default('admin'),
   ADMIN_PASSWORD: z.string().default('changeme'),
   ALLOWED_ORIGINS: z.string().default('http://localhost:5173'),
+  // Accept any origin on a private LAN address in addition to the explicit
+  // list above. The deployment is a USB drive carried between PCs: the router
+  // hands the host machine a different address at every site, so an explicit
+  // list is a value nobody can know at the time it has to be written, and a
+  // wrong one shows up as every request failing CORS.
+  //
+  // Only ever safe because the range is unroutable from the internet — a host
+  // reachable from outside must leave this off and name its origins, so the
+  // check below warns when both this and NODE_ENV=production are set.
+  ALLOW_LAN_ORIGINS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   RATE_LIMIT_MAX: z.coerce.number().default(200),
   LOGIN_RATE_LIMIT_MAX: z.coerce.number().default(10),
@@ -111,6 +124,14 @@ if (parsed.data.COOKIE_SAMESITE === 'none' && !cookieSecure) {
       'Set COOKIE_SECURE=true (and serve the API over HTTPS).'
   );
   process.exit(1);
+}
+
+if (parsed.data.ALLOW_LAN_ORIGINS && isProd) {
+  console.warn(
+    'ALLOW_LAN_ORIGINS=true under NODE_ENV=production: every private-range origin ' +
+      'passes CORS. Correct for the LAN/USB deployment, wrong for an internet-facing ' +
+      'host — set it to false there and list the origins in ALLOWED_ORIGINS.'
+  );
 }
 
 export const env = {
