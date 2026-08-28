@@ -210,6 +210,19 @@ async function main(): Promise<void> {
       rfid_uid: hex(2), gate_id: sideGate!._id, direction: 'exit',
     });
     expectEqual('gadget tag released', (deviceOut.json.data as { access_result?: string })?.access_result, 'granted');
+
+    // Last of the gadget-tap checks on purpose: a denied tap moves no
+    // occupancy state, so it cannot disturb the entry/exit ordering the
+    // checks above depend on.
+    console.log('\n--- a gadget tag is refused at a VEHICLE gate');
+    const parkingIn = gateRows.find((g) => g.name === 'Parking Entrance');
+    expectEqual('Parking Entrance gate exists', Boolean(parkingIn), true);
+    const gadgetAtParking = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(2), gate_id: parkingIn!._id, direction: 'entry',
+    });
+    const gp = gadgetAtParking.json.data as { access_result?: string; reason?: string };
+    expectEqual('a device tag at the parking barrier is denied', gp?.access_result, 'denied');
+    expectEqual('and denied for the right reason', gp?.reason, 'wrong_gate_type');
   } finally {
     console.log('\n--- cleanup');
     if (personId) {

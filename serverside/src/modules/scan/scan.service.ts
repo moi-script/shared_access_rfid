@@ -290,18 +290,20 @@ export const scanService = {
     // A gate has a fixed type, so a person card must not open the parking
     // barrier and a vehicle tag must not register attendance at a walking gate.
     //
-    // Gadgets sit OUTSIDE this rule rather than inside it, and this is the one
-    // place the third entity type needed a carve-out rather than a widening. A
-    // gate's type is only ever 'person' or 'vehicle' — there is no gadget gate
-    // and there should not be one, because a device has no route of its own: it
-    // accompanies whoever is carrying it, through whichever gate they use.
-    // Without this exclusion every gadget tap would be denied wrong_gate_type,
-    // since 'gadget' matches neither gate type by construction.
-    if (
-      access_result === 'granted' &&
-      entity_type !== 'gadget' &&
-      entity_type !== gate.type
-    ) {
+    // Gadgets needed a carve-out here rather than a widening, because a gate's
+    // type is only ever 'person' or 'vehicle': there is no gadget gate and
+    // there should not be one, so 'gadget' matches neither by construction and
+    // every device tap would otherwise be denied wrong_gate_type.
+    //
+    // The carve-out is narrow on purpose. Gadgets are exempt at PERSON gates
+    // ONLY, not universally. A device accompanies whoever carries it through a
+    // walking gate, which is why it cannot be held to a gate type of its own —
+    // but a laptop tag at the parking barrier is a genuine wrong-gate tap, and
+    // showing the guard GRANTED for it is the opposite of useful. Gadget Lane
+    // is seeded type: 'person' (seed.ts:18); no vehicle gate ever expects a
+    // device.
+    const gadgetAtPersonGate = entity_type === 'gadget' && gate.type === 'person';
+    if (access_result === 'granted' && !gadgetAtPersonGate && entity_type !== gate.type) {
       access_result = 'denied';
       reason = 'wrong_gate_type';
       personView = undefined;
