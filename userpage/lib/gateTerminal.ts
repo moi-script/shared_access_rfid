@@ -89,7 +89,20 @@ export interface TapDecision {
     /** The cardholder's registered devices, for the exit ownership check. The
      *  server sends this only on a GRANTED person tap — see the block at
      *  scan.service.ts:301 for why it is withheld on every denial. */
-    gadgets?: { gadget_type: string; brand_model: string; serial_number: string }[];
+    gadgets?: {
+      id: string;
+      gadget_type: string;
+      brand_model: string;
+      serial_number: string;
+      photo_url?: string;
+    }[];
+    /** Devices still inside, returned only on a granted person EXIT tap. */
+    gadgets_inside?: {
+      id: string;
+      gadget_type: string;
+      brand_model: string;
+      serial_number: string;
+    }[];
   };
   rfid_uid: string;
 }

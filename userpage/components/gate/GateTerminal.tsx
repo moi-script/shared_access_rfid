@@ -70,6 +70,99 @@ function VehicleImage({ path, gateKey }: { path?: string; gateKey: string }) {
   );
 }
 
+/** A registered device's photo. Same neutral glyph fallback as VehicleImage —
+ *  most gadgets have no photo, so the placeholder is the common case. */
+function GadgetImage({ path, gateKey }: { path?: string; gateKey: string }) {
+  const placeholder = <span className="font-display text-4xl font-700 opacity-60">—</span>;
+  if (!path) return placeholder;
+  return (
+    <AuthedImage
+      path={path}
+      alt="Registered device"
+      className="h-full w-full object-cover"
+      headers={{ "X-Gate-Key": gateKey }}
+      fallback={placeholder}
+    />
+  );
+}
+
+type DeviceRow = {
+  id: string;
+  gadget_type: string;
+  brand_model: string;
+  serial_number: string;
+  photo_url?: string;
+};
+
+/**
+ * The two-step prompt.
+ *
+ * Presentation only — there is no server session. Each gadget tap is an
+ * ordinary POST /scan/tap that has already moved that device's occupancy row
+ * by the time it appears here. So a terminal reload mid-prompt loses the
+ * checklist but never loses the record: everything tapped so far stands.
+ */
+type DevicePrompt = {
+  mode: "entry" | "exit";
+  personId: string;
+  expected: DeviceRow[];
+  seen: DeviceRow[];
+};
+
+/** The gadget-lane device checklist. Rendered both inside the granted result
+ *  card (immediately after the person's own tap) and, once that card's
+ *  `outcome` auto-resets after RESET_MS, as its own standalone panel — the
+ *  prompt persists on `devicePrompt` state, not on `outcome`, since a guard
+ *  needs far longer than RESET_MS to walk someone's devices past the reader. */
+function DevicePromptPanel({
+  prompt,
+  gateKey,
+  onDone,
+}: {
+  prompt: DevicePrompt;
+  gateKey: string;
+  onDone: () => void;
+}) {
+  if (prompt.mode !== "entry") return null;
+  return (
+    <div className="w-full text-center">
+      <p className="font-mono text-xs uppercase tracking-[0.42em] text-gold/70">Gadget Lane</p>
+      <h1 className="mt-5 font-display text-5xl font-700 uppercase leading-[0.9] tracking-tight">
+        Tap devices
+      </h1>
+      {prompt.seen.length === 0 ? (
+        <p className="mt-4 text-lg text-white/55">Tap each device now, or press Done</p>
+      ) : (
+        <div className="mx-auto mt-6 max-w-xl space-y-3 text-left">
+          {prompt.seen.map((g) => (
+            <div
+              key={g.id}
+              className="flex items-center gap-4 rounded-2xl bg-current/15 px-5 py-3"
+            >
+              <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-xl bg-current/15">
+                <GadgetImage path={g.photo_url} gateKey={gateKey} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-lg font-600 uppercase tracking-[0.14em] opacity-70">
+                  <span className="capitalize">{g.gadget_type}</span> · {g.brand_model}
+                </p>
+                <p className="font-mono text-3xl font-700 leading-tight">{g.serial_number}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={onDone}
+        className="mt-8 rounded-full bg-current/15 px-8 py-3 text-lg font-700 uppercase tracking-[0.18em]"
+      >
+        Done
+      </button>
+    </div>
+  );
+}
+
 /**
  * One row of the recent-taps panel.
  *
@@ -109,6 +202,7 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
   // card the reader never picked up.
   const [pending, setPending] = useState(false);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
+  const [devicePrompt, setDevicePrompt] = useState<DevicePrompt | null>(null);
 
   const busyRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -129,6 +223,15 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
     if (timerRef.current) clearTimeout(timerRef.current);
   }, []);
 
+  // Closes an unattended prompt so the next person does not tap into someone
+  // else's session. Resets on every device tap, not on a fixed deadline: a guard
+  // checking three laptops must not be cut off mid-queue.
+  useEffect(() => {
+    if (!devicePrompt) return;
+    const t = setTimeout(() => setDevicePrompt(null), 30_000);
+    return () => clearTimeout(t);
+  }, [devicePrompt]);
+
   const handleUid = useCallback(async (uid: string) => {
     if (!config) return;
     // Ignore, never queue: a queued tap would let the next person through on a
@@ -148,9 +251,27 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
       const result = await postTap(config.key, uid);
 
       if (result.state === "unauthorized") {
-        // The key is dead. Say so rather than silently refusing to grant.
+        // The key is dead. Say so rather than refusing to grant.
         clearStoredGate(routeId);
         setConfig(null);
+        return;
+      }
+
+      // A device tap while the prompt is open ticks a line instead of replacing the
+      // whole screen. Deduped by id so a double-read of the same sticker — common
+      // when someone holds it against the reader — does not list it twice.
+      if (
+        devicePrompt &&
+        (result.state === "granted" || result.state === "denied") &&
+        result.person?.type === "gadget" &&
+        result.access_result === "granted"
+      ) {
+        const g = result.person.gadgets?.[0];
+        if (g) {
+          setDevicePrompt((p) =>
+            p && !p.seen.some((s) => s.id === g.id) ? { ...p, seen: [...p.seen, g] } : p,
+          );
+        }
         return;
       }
 
@@ -178,6 +299,22 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
             ...r,
           ].slice(0, RECENT_LIMIT)
         );
+
+        // The gadget lane opens the prompt on a granted PERSON tap. A gadget tap
+        // arriving while the prompt is open is handled above and must not reopen it.
+        if (
+          meta.gadgetFocus &&
+          result.access_result === "granted" &&
+          result.person?.type !== "gadget" &&
+          result.person?.person_id
+        ) {
+          setDevicePrompt({
+            mode: "entry",
+            personId: result.person.person_id,
+            expected: [],
+            seen: [],
+          });
+        }
       }
 
       if (timerRef.current) clearTimeout(timerRef.current);
@@ -195,7 +332,7 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
       setPending(false);
       if (!releasedByTimer) busyRef.current = false;
     }
-  }, [config, routeId]);
+  }, [config, routeId, devicePrompt, meta]);
 
   // Global listener: the reader is a keyboard, but no longer one we keep
   // focused. Every keystroke on the page is inspected instead, so a tap is
@@ -311,8 +448,19 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
         </header>
 
         <div className="flex flex-1 items-center justify-center">
-          {!outcome && !pending && (
+          {!outcome && !pending && !devicePrompt && (
             <GateIdleScene gateType={meta.type} direction={meta.direction} />
+          )}
+
+          {/* Once the granted card below auto-resets after RESET_MS, the
+              device prompt keeps the screen open on its own — it is driven
+              by devicePrompt, not by outcome. */}
+          {!outcome && !pending && devicePrompt?.mode === "entry" && (
+            <DevicePromptPanel
+              prompt={devicePrompt}
+              gateKey={config.key}
+              onDone={() => setDevicePrompt(null)}
+            />
           )}
 
           {/* In flight. The skeleton mirrors the result card below, so the real
@@ -381,6 +529,20 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
                       </p>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* The device checklist starts as soon as the person is granted.
+                  Shown here so the guard sees it immediately, before RESET_MS
+                  pulls this card away — see the standalone panel above for
+                  what keeps showing it afterward. */}
+              {meta.gadgetFocus && devicePrompt?.mode === "entry" && (
+                <div className="mt-6">
+                  <DevicePromptPanel
+                    prompt={devicePrompt}
+                    gateKey={config.key}
+                    onDone={() => setDevicePrompt(null)}
+                  />
                 </div>
               )}
               <div className="mt-8 flex items-center justify-center gap-8">
