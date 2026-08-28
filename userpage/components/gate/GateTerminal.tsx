@@ -16,6 +16,7 @@ import {
   type TapOutcome,
 } from "@/lib/gateTerminal";
 import { reasonText } from "@/lib/reasonText";
+import { API_BASE } from "@/lib/auth";
 
 const RESET_MS = 750;
 const UID_RE = /^[0-9A-Fa-f]{6,32}$/;
@@ -123,6 +124,57 @@ function DevicePromptPanel({
   gateKey: string;
   onDone: () => void;
 }) {
+  if (prompt.mode === "exit") {
+    // The exit lane already knows which devices this person is carrying —
+    // gadgets_inside — so this checklist is expected-vs-seen rather than the
+    // entry lane's open-ended "whatever gets tapped" list.
+    return (
+      <div className="w-full text-center">
+        <p className="font-mono text-xs uppercase tracking-[0.42em] text-gold/70">
+          Devices to return
+        </p>
+        <h1 className="mt-5 font-display text-5xl font-700 uppercase leading-[0.9] tracking-tight">
+          Tap each device
+        </h1>
+        <div className="mx-auto mt-6 max-w-xl space-y-3 text-left">
+          {prompt.expected.map((g) => {
+            const ticked = prompt.seen.some((s) => s.id === g.id);
+            return (
+              <div
+                key={g.id}
+                className={`flex items-center gap-4 rounded-2xl px-5 py-3 ${
+                  ticked ? "bg-current/15" : "bg-current/5"
+                }`}
+              >
+                <div
+                  className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-lg font-700 ${
+                    ticked ? "bg-current/25" : "bg-current/10 opacity-40"
+                  }`}
+                  aria-hidden
+                >
+                  {ticked ? "✓" : ""}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-lg font-600 uppercase tracking-[0.14em] opacity-70">
+                    <span className="capitalize">{g.gadget_type}</span> · {g.brand_model}
+                  </p>
+                  <p className="font-mono text-3xl font-700 leading-tight">{g.serial_number}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={onDone}
+          className="mt-8 rounded-full bg-current/15 px-8 py-3 text-lg font-700 uppercase tracking-[0.18em]"
+        >
+          Done
+        </button>
+      </div>
+    );
+  }
+
   if (prompt.mode !== "entry") return null;
   return (
     <div className="w-full text-center">
@@ -203,6 +255,10 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
   const [pending, setPending] = useState(false);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
   const [devicePrompt, setDevicePrompt] = useState<DevicePrompt | null>(null);
+  // Set only when an exit checklist closes with devices still unticked. Gold,
+  // not red: the exit is never refused, this just tells the guard what to log.
+  // Cleared on the very next tap so it never lingers over an unrelated scan.
+  const [deviceWarning, setDeviceWarning] = useState<DeviceRow[] | null>(null);
 
   const busyRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -223,14 +279,65 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
     if (timerRef.current) clearTimeout(timerRef.current);
   }, []);
 
+  // Closes an exit checklist, warning in gold on anything still unticked and
+  // filing the audit row for it. The exit itself is never in question here —
+  // the person was already released by their own tap in step 1 — so this is
+  // pure record-keeping: it always clears the prompt, and only touches the
+  // network when there is something missing to log.
+  const closeExitPrompt = useCallback(async () => {
+    const p = devicePrompt;
+    if (!p || p.mode !== "exit") return;
+    const missing = p.expected.filter((e) => !p.seen.some((s) => s.id === e.id));
+    setDevicePrompt(null);
+    if (missing.length === 0) return;
+    setDeviceWarning(missing);
+    if (!config) return;
+    // Fire-and-log. The person is already outside — a failed audit write must
+    // never hold the terminal, and the guard has the warning on screen either
+    // way. Matches how liveHub.notifyScan is treated at the end of a tap.
+    try {
+      await fetch(`${API_BASE}/scan/gadget-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Gate-Key": config.key },
+        body: JSON.stringify({
+          person_id: p.personId,
+          missing_gadget_ids: missing.map((m) => m.id),
+        }),
+      });
+    } catch (err) {
+      console.error("[gate] gadget session close failed", err);
+    }
+  }, [devicePrompt, config]);
+
+  // Closes itself once the last expected device is read, so the guard does not
+  // have to press anything in the normal case.
+  useEffect(() => {
+    if (devicePrompt?.mode !== "exit") return;
+    if (devicePrompt.expected.length === 0) return;
+    const allSeen = devicePrompt.expected.every((e) =>
+      devicePrompt.seen.some((s) => s.id === e.id),
+    );
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- this synchronizes devicePrompt with an external event (the last expected device being read by the physical RFID reader), not with other React state.
+    if (allSeen) setDevicePrompt(null);
+  }, [devicePrompt]);
+
   // Closes an unattended prompt so the next person does not tap into someone
   // else's session. Resets on every device tap, not on a fixed deadline: a guard
   // checking three laptops must not be cut off mid-queue.
   useEffect(() => {
     if (!devicePrompt) return;
-    const t = setTimeout(() => setDevicePrompt(null), 30_000);
+    const t = setTimeout(() => {
+      // An exit prompt that times out with devices unticked must still file
+      // the audit row — see closeExitPrompt. The entry lane has no such
+      // record to keep, so it simply drops the prompt.
+      if (devicePrompt.mode === "exit") {
+        void closeExitPrompt();
+      } else {
+        setDevicePrompt(null);
+      }
+    }, 30_000);
     return () => clearTimeout(t);
-  }, [devicePrompt]);
+  }, [devicePrompt, closeExitPrompt]);
 
   const handleUid = useCallback(async (uid: string) => {
     if (!config) return;
@@ -241,6 +348,9 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
 
     busyRef.current = true;
     setPending(true);
+    // Cleared on every new tap so a previous exit's gold warning never lingers
+    // over an unrelated scan.
+    setDeviceWarning(null);
     // releasedByTimer tracks whether the auto-reset timer below has taken
     // ownership of releasing busyRef. The finally block only releases it
     // itself when that hand-off never happened (early return or a throw) —
@@ -312,6 +422,23 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
             mode: "entry",
             personId: result.person.person_id,
             expected: [],
+            seen: [],
+          });
+        }
+
+        // Keyed on gadgets_inside, NOT on the route. The server sends this only on a
+        // granted person EXIT tap and only when devices are actually still inside, so
+        // every other tap on this terminal behaves exactly as it did before.
+        if (
+          meta.direction === "exit" &&
+          result.access_result === "granted" &&
+          result.person?.person_id &&
+          (result.person.gadgets_inside?.length ?? 0) > 0
+        ) {
+          setDevicePrompt({
+            mode: "exit",
+            personId: result.person.person_id,
+            expected: result.person.gadgets_inside!,
             seen: [],
           });
         }
@@ -448,7 +575,7 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
         </header>
 
         <div className="flex flex-1 items-center justify-center">
-          {!outcome && !pending && !devicePrompt && (
+          {!outcome && !pending && !devicePrompt && !deviceWarning && (
             <GateIdleScene gateType={meta.type} direction={meta.direction} />
           )}
 
@@ -461,6 +588,43 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
               gateKey={config.key}
               onDone={() => setDevicePrompt(null)}
             />
+          )}
+
+          {/* Same standalone survival as the entry prompt above, for the exit
+              checklist. Done here always runs closeExitPrompt, which is the
+              only path that both clears the prompt and — if anything is
+              still unticked — warns and files the audit row. */}
+          {!outcome && !pending && devicePrompt?.mode === "exit" && (
+            <DevicePromptPanel
+              prompt={devicePrompt}
+              gateKey={config.key}
+              onDone={() => void closeExitPrompt()}
+            />
+          )}
+
+          {/* The exit is never refused — this is a record-keeping notice, not
+              a denial, so it is gold with navy text like the no-device panel
+              above, never red. Rendered whenever nothing else is claiming the
+              center of the screen, so it survives past RESET_MS the same way
+              the device prompts above it do. */}
+          {!outcome && !pending && !devicePrompt && deviceWarning && (
+            <div className="w-full text-center">
+              <div className="mx-auto max-w-xl rounded-2xl bg-gold px-6 py-5 text-navy">
+                <p className="font-display text-4xl font-700 uppercase tracking-tight">
+                  Device not returned
+                </p>
+                <div className="mt-3 space-y-2 text-left">
+                  {deviceWarning.map((g) => (
+                    <p key={g.id} className="text-xl font-600">
+                      <span className="capitalize">{g.gadget_type}</span> · {g.brand_model}
+                      {" · SN "}
+                      <span className="font-mono">{g.serial_number}</span>
+                    </p>
+                  ))}
+                </div>
+                <p className="mt-3 text-lg">Logged. This did not block the exit.</p>
+              </div>
+            </div>
           )}
 
           {/* In flight. The skeleton mirrors the result card below, so the real
@@ -542,6 +706,19 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
                     prompt={devicePrompt}
                     gateKey={config.key}
                     onDone={() => setDevicePrompt(null)}
+                  />
+                </div>
+              )}
+
+              {/* The ordinary exit's checklist, keyed on gadgets_inside rather
+                  than on meta.gadgetFocus (this route is never gadgetFocus) —
+                  see the comment on where devicePrompt is set in handleUid. */}
+              {devicePrompt?.mode === "exit" && (
+                <div className="mt-6">
+                  <DevicePromptPanel
+                    prompt={devicePrompt}
+                    gateKey={config.key}
+                    onDone={() => void closeExitPrompt()}
                   />
                 </div>
               )}
