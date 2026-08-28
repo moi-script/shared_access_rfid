@@ -7,9 +7,16 @@ export const createPersonSchema = z.object({
   department_section: z.string().optional(),
   contact_email: z.string().email().optional(),
   photo_url: z.string().url().optional(),
+  // Uppercased at the boundary so every NEW row stores one spelling of a hex
+  // UID. Casing is the CAV 8832 clash vector: `abcdef` and `ABCDEF` are the
+  // same physical card and used to register as two rows. assertUidFree now
+  // catches that clash regardless of stored casing (it is what protects the
+  // pre-existing mixed-case rows, which are deliberately not migrated); this
+  // stops new ones being created.
   rfid_uid: z
     .string()
     .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
+    .transform((v) => v.toUpperCase())
     .optional(),
   status: z.enum(['active', 'inactive', 'pending']).optional(),
   // Optional here, required by the registration form. Bulk import shares this
@@ -33,7 +40,13 @@ export const updatePersonSchema = createPersonSchema
   .omit({ rfid_uid: true, id_number: true });
 export const statusSchema = z.object({ status: z.enum(['active', 'inactive']) });
 export const reassignRfidSchema = z.object({
-  rfid_uid: z.string().regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters'),
+  // Same normalization as create — see the note there. The reassign path is
+  // the one that must not be forgotten: it is how a replacement card enters
+  // the namespace.
+  rfid_uid: z
+    .string()
+    .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
+    .transform((v) => v.toUpperCase()),
 });
 
 export const importPersonsSchema = z.object({

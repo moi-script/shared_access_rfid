@@ -76,7 +76,21 @@ export const reportService = {
       $or: [
         {
           reason: {
-            $in: ['already_inside', 'exit_without_entry', 'manual_override', 'occupancy_unavailable'],
+            $in: [
+              'already_inside',
+              'exit_without_entry',
+              'manual_override',
+              'occupancy_unavailable',
+              // The entire output of scan.service.closeGadgetSession: a person
+              // left with registered devices still inside. It belongs in the
+              // FIRST branch, not the granted-only one below, because the row
+              // is written `granted` by construction (nothing was refused —
+              // the person was already outside) and so is never part of the
+              // routine-denial vocabulary that branch exists to filter out.
+              // Without this entry the feature's only permanent record is
+              // invisible on the one screen an auditor reads.
+              'gadget_not_returned',
+            ],
           },
         },
         {
@@ -111,6 +125,10 @@ export const reportService = {
       { $limit: 500 },
       { $lookup: { from: 'people', localField: 'entity_id', foreignField: '_id', as: 'person' } },
       { $lookup: { from: 'vehicles', localField: 'entity_id', foreignField: '_id', as: 'vehicle' } },
+      // Gadgets are the third entity_type, so their exit_without_entry and
+      // already_inside rows already MATCH above — they just rendered nameless,
+      // which is worse than absent: a nameless anomaly row cannot be acted on.
+      { $lookup: { from: 'gadgets', localField: 'entity_id', foreignField: '_id', as: 'gadget' } },
       { $lookup: { from: 'gates', localField: 'gate_id', foreignField: '_id', as: 'gate' } },
       { $lookup: { from: 'users', localField: 'actor_user_id', foreignField: '_id', as: 'actor' } },
       {
@@ -122,10 +140,19 @@ export const reportService = {
           access_result: 1,
           entity_type: 1,
           rfid_uid: 1,
+          // A gadget has no name and no plate, so its BRAND/MODEL takes the
+          // slot — the same convention occupancy.repository.listInside
+          // established for the roster, so one device reads identically on
+          // both screens.
           name: {
             $ifNull: [
               { $arrayElemAt: ['$person.full_name', 0] },
-              { $arrayElemAt: ['$vehicle.plate_number', 0] },
+              {
+                $ifNull: [
+                  { $arrayElemAt: ['$vehicle.plate_number', 0] },
+                  { $arrayElemAt: ['$gadget.brand_model', 0] },
+                ],
+              },
             ],
           },
           gate: {

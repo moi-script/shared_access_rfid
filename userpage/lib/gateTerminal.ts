@@ -88,7 +88,9 @@ export interface TapDecision {
     registered?: { vehicle_type: string; make?: string }[];
     /** The cardholder's registered devices, for the exit ownership check. The
      *  server sends this only on a GRANTED person tap — see the block at
-     *  scan.service.ts:301 for why it is withheld on every denial. */
+     *  scan.service.ts:432 for why it is withheld on every denial (and the
+     *  gadget arm just after it, which strips the list off a DENIED device
+     *  tap, where it is populated before the decision is known). */
     gadgets?: {
       id: string;
       gadget_type: string;

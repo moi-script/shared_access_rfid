@@ -454,6 +454,28 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
           result.person?.person_id &&
           (result.person.gadgets_inside?.length ?? 0) > 0
         ) {
+          // Person B tapping out while person A's checklist is still open used
+          // to overwrite it with a plain setDevicePrompt. That silently
+          // destroyed A's audit row: the 30s timeout effect is keyed on
+          // devicePrompt, so replacing the prompt runs the effect's cleanup,
+          // clearing A's timer before it ever fired — and closeExitPrompt,
+          // which is the ONLY thing that writes gadget_not_returned, never ran
+          // for A. Their unreturned devices went unrecorded, which is the one
+          // fact this whole lane exists to record.
+          //
+          // AWAITED, not fire-and-forget, and that is load-bearing against
+          // closingRef: closeExitPrompt sets that guard on entry and clears it
+          // in its finally, so a `void` call here would open B's prompt while
+          // the guard was still raised for A's in-flight POST — and B's own
+          // close would then hit the `if (closingRef.current) return` and be
+          // skipped, turning one lost audit row into two. Awaiting resolves
+          // after the finally, so the guard is down before B's prompt exists.
+          //
+          // Nothing about B's passage waits on this: the barrier decision was
+          // made server-side and setOutcome already rendered it above. Only
+          // the checklist is sequenced. A no-op when nothing is open —
+          // closeExitPrompt returns immediately unless an exit prompt exists.
+          await closeExitPrompt();
           setDevicePrompt({
             mode: "exit",
             personId: result.person.person_id,
@@ -478,7 +500,7 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
       setPending(false);
       if (!releasedByTimer) busyRef.current = false;
     }
-  }, [config, routeId, devicePrompt, meta]);
+  }, [config, routeId, devicePrompt, meta, closeExitPrompt]);
 
   // Global listener: the reader is a keyboard, but no longer one we keep
   // focused. Every keystroke on the page is inspected instead, so a tap is

@@ -321,6 +321,45 @@ async function main(): Promise<void> {
       gadgetLogRows.some((l) => l.entity_type === 'gadget'),
       true
     );
+
+    console.log('\n--- the audit row is REACHABLE on the anomalies report');
+    // The gadget_not_returned check above proves the row was written. This
+    // proves it can be read on the one screen an auditor actually opens, which
+    // is a different property and the one that was broken: the reasons the
+    // anomalies query matches on are an explicit $in list, and a new reason
+    // that nobody adds to it is written perfectly and seen by no one. A
+    // verification gate that misses the feature's only permanent output is not
+    // a gate.
+    //
+    // Bounded to today so the 500-row cap cannot push the row out of the
+    // window; `to` is inclusive of the whole local day (dateRange.ts).
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+      now.getDate()
+    ).padStart(2, '0')}`;
+    const anomalies = await request(superadmin, 'GET', `/reports/anomalies?from=${today}&to=${today}`);
+    expectEqual('anomalies report responded', anomalies.status, OK);
+    const anomalyRows = ((anomalies.json.data as { rows?: unknown[] })?.rows ?? []) as {
+      reason?: string;
+      entity_type?: string;
+      name?: string | null;
+    }[];
+    expectEqual(
+      'the gadget_not_returned row is reachable via GET /reports/anomalies',
+      anomalyRows.some((r) => r.reason === 'gadget_not_returned'),
+      true
+    );
+    // And the gadget rows that already matched the query render a name. They
+    // did not before the gadgets $lookup was added: a nameless anomaly row is
+    // worse than an absent one, because it cannot be acted on. The stranger
+    // device's exit_without_entry above is one such row.
+    const gadgetAnomalies = anomalyRows.filter((r) => r.entity_type === 'gadget');
+    expectEqual('a gadget anomaly row exists to check', gadgetAnomalies.length > 0, true);
+    expectEqual(
+      'and it resolves a display name rather than null',
+      gadgetAnomalies.every((r) => Boolean(r.name)),
+      true
+    );
   } finally {
     console.log('\n--- cleanup');
     if (personId) {

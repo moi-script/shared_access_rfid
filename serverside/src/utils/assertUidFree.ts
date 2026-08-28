@@ -34,17 +34,40 @@ export async function assertUidFree(
   const skip = (kind: Kind, id: unknown) =>
     self?.kind === kind && String(id) === String(self.id);
 
-  const person = await PersonModel.findOne({ rfid_uid: uid }).select('_id').lean();
+  // Anchored and case-INSENSITIVE, because a UID is hex and hex has two
+  // spellings of every value. The check used to be an exact-match findOne, so
+  // registering a person `abcdef` and a gadget `ABCDEF` raised no clash at
+  // all: two rows, one physical namespace, and whichever card the reader's
+  // casing did not match was then permanently `unregistered_uid` at the
+  // barrier — the CAV 8832 defect this file's docblock is about, reintroduced
+  // by casing alone. Schema-level uppercasing (persons/vehicles/gadgets
+  // .schema.ts) keeps NEW rows consistent; this is what catches the ones
+  // already stored in mixed case, which are deliberately not migrated.
+  //
+  // A regex, not a collation: a case-insensitive collation has to be
+  // configured on the collection or passed on every query, and one forgotten
+  // call site silently restores the old behavior. Deliberately NOT an
+  // unanchored regex either — an unanchored `ABCD` would match `12ABCD34` and
+  // refuse a UID that is genuinely free.
+  //
+  // The input is user-supplied and reaches RegExp, so it is escaped first.
+  // tapSchema and the create schemas already constrain it to hex, but this
+  // helper must not depend on every future caller having validated first: an
+  // unescaped `.*` here would report a clash against any UID at all.
+  const escaped = uid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const anyCase = new RegExp(`^${escaped}$`, 'i');
+
+  const person = await PersonModel.findOne({ rfid_uid: anyCase }).select('_id').lean();
   if (person && !skip('person', person._id)) {
     throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a person');
   }
 
-  const vehicle = await VehicleModel.findOne({ rfid_uid: uid }).select('_id').lean();
+  const vehicle = await VehicleModel.findOne({ rfid_uid: anyCase }).select('_id').lean();
   if (vehicle && !skip('vehicle', vehicle._id)) {
     throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a vehicle');
   }
 
-  const gadget = await GadgetModel.findOne({ rfid_uid: uid }).select('_id').lean();
+  const gadget = await GadgetModel.findOne({ rfid_uid: anyCase }).select('_id').lean();
   if (gadget && !skip('gadget', gadget._id)) {
     throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a gadget');
   }

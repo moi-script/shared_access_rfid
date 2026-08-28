@@ -73,6 +73,10 @@ async function recentScans(limit: number) {
     { $limit: limit },
     { $lookup: { from: 'gates', localField: 'gate_id', foreignField: '_id', as: 'gate' } },
     { $lookup: { from: 'people', localField: 'entity_id', foreignField: '_id', as: 'person' } },
+    // Gadgets are the third entity_type. The Gadget Lane roughly doubles tap
+    // volume, so without this join the 8-row live feed fills with nameless
+    // rows and stops being a feed of anything.
+    { $lookup: { from: 'gadgets', localField: 'entity_id', foreignField: '_id', as: 'gadget' } },
     {
       $project: {
         _id: 0,
@@ -83,7 +87,15 @@ async function recentScans(limit: number) {
         reason: 1,
         rfid_uid: 1,
         gate: { $ifNull: [{ $arrayElemAt: ['$gate.name', 0] }, 'Unknown gate'] },
-        name: { $arrayElemAt: ['$person.full_name', 0] },
+        // A gadget has no name, so its BRAND/MODEL takes the slot — the
+        // convention occupancy.repository.listInside established for the
+        // roster, so one device reads the same on every screen.
+        name: {
+          $ifNull: [
+            { $arrayElemAt: ['$person.full_name', 0] },
+            { $arrayElemAt: ['$gadget.brand_model', 0] },
+          ],
+        },
       },
     },
   ]);
