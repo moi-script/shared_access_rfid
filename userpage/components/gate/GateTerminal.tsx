@@ -262,6 +262,13 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
 
   const busyRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards against a second dispatch reaching the same closure before React
+  // commits the setDevicePrompt(null) below. A kiosk touchscreen can fire an
+  // emulated and a native click for one press, and both would otherwise see the
+  // same non-null prompt, compute the same `missing`, and file the audit row
+  // twice — two gadget_not_returned rows for one exit, which is exactly the
+  // double-count the row exists to make countable. Mirrors busyRef's shape.
+  const closingRef = useRef(false);
   // Buffer for the global keydown listener below: the characters typed so
   // far in the current burst, and the timestamp of the last keystroke so the
   // next one can be checked against MAX_KEYSTROKE_GAP_MS.
@@ -285,27 +292,39 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
   // pure record-keeping: it always clears the prompt, and only touches the
   // network when there is something missing to log.
   const closeExitPrompt = useCallback(async () => {
+    // A second dispatch (double-tap, or a touchscreen's emulated + native
+    // click) reaching this closure before setDevicePrompt(null) commits would
+    // otherwise see the same non-null prompt and file the same audit row
+    // twice. Ignore it, never queue it — there is nothing to queue.
+    if (closingRef.current) return;
     const p = devicePrompt;
     if (!p || p.mode !== "exit") return;
-    const missing = p.expected.filter((e) => !p.seen.some((s) => s.id === e.id));
-    setDevicePrompt(null);
-    if (missing.length === 0) return;
-    setDeviceWarning(missing);
-    if (!config) return;
-    // Fire-and-log. The person is already outside — a failed audit write must
-    // never hold the terminal, and the guard has the warning on screen either
-    // way. Matches how liveHub.notifyScan is treated at the end of a tap.
+    closingRef.current = true;
     try {
-      await fetch(`${API_BASE}/scan/gadget-session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Gate-Key": config.key },
-        body: JSON.stringify({
-          person_id: p.personId,
-          missing_gadget_ids: missing.map((m) => m.id),
-        }),
-      });
-    } catch (err) {
-      console.error("[gate] gadget session close failed", err);
+      const missing = p.expected.filter((e) => !p.seen.some((s) => s.id === e.id));
+      setDevicePrompt(null);
+      if (missing.length === 0) return;
+      setDeviceWarning(missing);
+      if (!config) return;
+      // Fire-and-log. The person is already outside — a failed audit write must
+      // never hold the terminal, and the guard has the warning on screen either
+      // way. Matches how liveHub.notifyScan is treated at the end of a tap.
+      try {
+        await fetch(`${API_BASE}/scan/gadget-session`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Gate-Key": config.key },
+          body: JSON.stringify({
+            person_id: p.personId,
+            missing_gadget_ids: missing.map((m) => m.id),
+          }),
+        });
+      } catch (err) {
+        console.error("[gate] gadget session close failed", err);
+      }
+    } finally {
+      // Reset unconditionally — including when the POST above throws — so a
+      // later, genuinely new prompt is not stranded unable to close.
+      closingRef.current = false;
     }
   }, [devicePrompt, config]);
 
