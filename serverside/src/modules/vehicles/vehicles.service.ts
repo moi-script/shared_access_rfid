@@ -7,6 +7,7 @@ import { Actor, assertCanWrite } from '../../utils/authority';
 import { nextSchoolYearEnd } from '../../utils/schoolYear';
 import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
 import { personRepo } from '../persons/persons.repository';
+import { assertOwnerRegistrable } from '../persons/personStatus';
 import { VEHICLE_LIMITS, VehicleType, pluralizeType } from '../../constants/vehicleTypes';
 import { escapeRegex } from '../../utils/escapeRegex';
 
@@ -90,6 +91,12 @@ export const vehicleService = {
     // alone and then find no owner to show on the terminal.
     const owner = await personRepo.findById(String(data.owner_person_id));
     if (!owner) throw new ApiError('NOT_FOUND', 'Vehicle owner not found');
+    // Existing-and-not-deleted was never the whole question. A deactivated
+    // owner is refused at the barrier by scan.service.tap but was still
+    // accepted here, so deactivation left the registration desk open. Runs
+    // before the RFID and allowance checks so the clerk is told the real
+    // reason ("this person is inactive") rather than a downstream symptom.
+    assertOwnerRegistrable(owner, 'vehicle');
     const existingRfid = await vehicleRepo.findByRfid(String(data.rfid_uid));
     if (existingRfid) throw new ApiError('DUPLICATE_RFID');
     // A UID belongs to a person OR a vehicle, never both. scan.service.tap
@@ -206,6 +213,12 @@ export const vehicleService = {
       const effectiveValidUntil = data.valid_until ?? current.valid_until;
       const willBeActive = willBeStatusActive && new Date(effectiveValidUntil) >= new Date();
       if (willBeActive) {
+        // Gated on willBeActive, not on the outer branch: a PATCH that
+        // DEACTIVATES or backdates a vehicle must keep working for an
+        // inactive owner. Refusing those would mean a deactivated person's
+        // vehicles could never be switched off — the guard would protect the
+        // exact state it exists to reach.
+        assertOwnerRegistrable(owner, 'vehicle');
         const active = await vehicleRepo.findActiveByOwner(owner._id, new Date());
         const effectiveType = (data.vehicle_type ?? current.vehicle_type) as VehicleType;
         // current._id is excluded: an already-active vehicle must not count

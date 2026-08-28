@@ -39,3 +39,28 @@ export const reassignRfidSchema = z.object({
 export const importPersonsSchema = z.object({
   rows: z.array(createPersonSchema.omit({ password: true })).min(1).max(500),
 });
+
+// The three keys the directory already filters on, named exactly as
+// buildListFilter names them (`section`, not `department_section` — that is
+// users.schema's spelling and the two endpoints must not diverge). Every key
+// is optional, so `{}` is a legal filter meaning "everyone this actor may
+// write". That breadth is intentional and is fenced server-side in
+// resolveBulkTargets, never here.
+export const bulkFilterSchema = z.object({
+  type: z.enum(['student', 'staff', 'employee']).optional(),
+  section: z.string().optional(),
+  search: z.string().optional(),
+});
+
+// The preview carries the direction alongside the filter because
+// resolveBulkTargets excludes different rows for each — see the comment on
+// personController.bulkPreview. Required, not defaulted: a preview that
+// silently assumed a direction would show a count for the wrong one.
+export const bulkPreviewSchema = bulkFilterSchema.extend({
+  status: z.enum(['active', 'inactive']),
+});
+
+export const bulkStatusSchema = z.object({
+  status: z.enum(['active', 'inactive']),
+  filter: bulkFilterSchema.default({}),
+});

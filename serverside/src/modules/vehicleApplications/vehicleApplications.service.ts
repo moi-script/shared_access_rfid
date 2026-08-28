@@ -6,6 +6,7 @@ import { getPagination, buildMeta } from '../../utils/pagination';
 import { Actor, assertCanWrite } from '../../utils/authority';
 import { nextSchoolYearEnd } from '../../utils/schoolYear';
 import { personRepo } from '../persons/persons.repository';
+import { assertOwnerRegistrable } from '../persons/personStatus';
 import { vehicleService, assertWithinLimit } from '../vehicles/vehicles.service';
 import { vehicleRepo } from '../vehicles/vehicles.repository';
 import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
@@ -106,6 +107,12 @@ export const vehicleApplicationService = {
 
     const owner = await personRepo.findById(input.owner_person_id);
     if (!owner) throw new ApiError('NOT_FOUND', 'Applicant not found');
+    // The third issue point, and the one that would otherwise stay open: this
+    // path writes its own application row and then calls vehicleService.create,
+    // so without a check here the application is filed first and only the
+    // vehicle write is refused — leaving the orphan application this method's
+    // own pre-checks below exist to prevent. Refused up front instead.
+    assertOwnerRegistrable(owner, 'vehicle');
 
     // Pre-check both uniqueness constraints the vehicle write would enforce
     // anyway. The write order below (application, then vehicle) is load-bearing

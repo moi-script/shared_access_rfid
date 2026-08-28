@@ -51,6 +51,23 @@ export const personController = {
   setStatus: asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(res, await personService.setStatus(req.params.id, req.body.status, actorOf(req)));
   }),
+  // The preview is a GET with the filter in the query string and the intended
+  // direction in `status`, because reactivation excludes rows deactivation
+  // does not (a linked login a superadmin killed). A preview that ignored the
+  // direction would promise a count the mutation then declines to deliver.
+  bulkPreview: asyncHandler(async (req: Request, res: Response) => {
+    const { status, ...filter } = req.query as Record<string, string>;
+    sendSuccess(
+      res,
+      await personService.bulkPreview(filter, actorOf(req), status as 'active' | 'inactive')
+    );
+  }),
+  bulkSetStatus: asyncHandler(async (req: Request, res: Response) => {
+    sendSuccess(
+      res,
+      await personService.bulkSetStatus(req.body.status, req.body.filter, actorOf(req))
+    );
+  }),
   reassignRfid: asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(res, await personService.reassignRfid(req.params.id, req.body.rfid_uid, actorOf(req)));
   }),

@@ -11,6 +11,21 @@ export interface IPerson extends Document {
   signature_url?: string;
   rfid_uid?: string;
   status: 'active' | 'inactive' | 'pending';
+  /**
+   * When this person's status last BECAME 'active' — never when it was merely
+   * re-saved while already active.
+   *
+   * `updatedAt` cannot answer this and must not be used for it: it moves on
+   * every write, including a photo upload, a card reassignment, or a name
+   * correction. This field exists because the status export needs a date that
+   * means one specific thing.
+   *
+   * `null` means no activation has been RECORDED, which is not the same as
+   * "never activated" — every person who predates this field is null until
+   * their status is next touched. `npm run migrate:activation-dates` fills
+   * those in from createdAt as a stated approximation.
+   */
+  last_activated_at: Date | null;
   deleted_at: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -32,6 +47,7 @@ const personSchema = new Schema<IPerson>(
       default: 'active',
       index: true,
     },
+    last_activated_at: { type: Date, default: null },
     deleted_at: { type: Date, default: null, index: true },
   },
   { timestamps: true }

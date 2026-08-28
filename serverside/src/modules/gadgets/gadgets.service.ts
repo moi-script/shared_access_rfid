@@ -5,6 +5,7 @@ import { ApiError } from '../../utils/ApiError';
 import { getPagination, buildMeta } from '../../utils/pagination';
 import { Actor, assertCanWrite } from '../../utils/authority';
 import { personRepo } from '../persons/persons.repository';
+import { assertOwnerRegistrable } from '../persons/personStatus';
 import {
   GADGET_LIMITS,
   GadgetType,
@@ -103,6 +104,10 @@ export const gadgetService = {
     // the guard would be shown a serial with no name attached to it.
     const owner = await personRepo.findById(String(data.owner_person_id));
     if (!owner) throw new ApiError('NOT_FOUND', 'Gadget owner not found');
+    // Same reasoning as vehicleService.create: existing-and-not-deleted was
+    // never the whole question. Refused before takeSerial so a rejected
+    // registration does not burn a serial number on its way out.
+    assertOwnerRegistrable(owner, 'gadget');
 
     const serial_number = await takeSerial(String(data.serial_number));
 
@@ -165,6 +170,10 @@ export const gadgetService = {
       if (!owner) {
         throw new ApiError('NOT_FOUND', 'Gadget owner not found or deleted; cannot activate');
       }
+      // Inside the willBeActive branch, so DEACTIVATING a gadget still works
+      // for an inactive owner — otherwise a deactivated person's gadgets
+      // could never be switched off. Mirrors vehicles.service.
+      assertOwnerRegistrable(owner, 'gadget');
       const active = await gadgetRepo.findActiveByOwner(owner._id);
       // current._id is excluded so an already-active row does not count against
       // its own limit on a PATCH that merely re-sends its fields.
