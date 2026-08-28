@@ -10,12 +10,40 @@ export interface GateConfig {
   direction: "entry" | "exit";
 }
 
-/** The four routes, each pre-declaring which gate it expects to be provisioned as. */
+/**
+ * The five routes, each pre-declaring which gate it expects to be provisioned as.
+ *
+ * `gadgetFocus` marks the lane whose whole reason to exist is the device check.
+ * It changes nothing about the tap — same endpoint, same person/entry gate type
+ * — only how the result is laid out and whether a missing device is called out.
+ *
+ * It is declared on EVERY entry, false included, rather than only on the lane
+ * that sets it: with `as const` an absent key is absent from the union type, so
+ * `meta.gadgetFocus` would not typecheck at the one call site that needs it.
+ * Spelling it out beats widening the type and losing the literal keys.
+ *
+ * Note that person-entry-gadget provisions independently of person-entry:
+ * getStoredGate keys storage by routeId, so the two terminals hold separate
+ * gate records and their taps are distinguishable in the scan logs. That
+ * separation is the point of the route — see the 'Gadget Lane' gate in
+ * serverside/src/config/seed.ts.
+ */
 export const GATE_ROUTES = {
-  "person-entry": { type: "person", direction: "entry", label: "Person · Entry" },
-  "person-exit": { type: "person", direction: "exit", label: "Person · Exit" },
-  "vehicle-entry": { type: "vehicle", direction: "entry", label: "Vehicle · Entry" },
-  "vehicle-exit": { type: "vehicle", direction: "exit", label: "Vehicle · Exit" },
+  "person-entry": {
+    type: "person", direction: "entry", label: "Person · Entry", gadgetFocus: false,
+  },
+  "person-entry-gadget": {
+    type: "person", direction: "entry", label: "Person · Entry · Gadget Lane", gadgetFocus: true,
+  },
+  "person-exit": {
+    type: "person", direction: "exit", label: "Person · Exit", gadgetFocus: false,
+  },
+  "vehicle-entry": {
+    type: "vehicle", direction: "entry", label: "Vehicle · Entry", gadgetFocus: false,
+  },
+  "vehicle-exit": {
+    type: "vehicle", direction: "exit", label: "Vehicle · Exit", gadgetFocus: false,
+  },
 } as const;
 
 export type GateRouteId = keyof typeof GATE_ROUTES;

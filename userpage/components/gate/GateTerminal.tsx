@@ -338,6 +338,51 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
               <p className="text-center font-display text-7xl font-700 uppercase tracking-tight">
                 {outcome.access_result}
               </p>
+              {/* The lane the tap was recorded against. Present on every route,
+                  not just the gadget lane: the header band names the gate too,
+                  but the guard reads the result card, and two person/entry
+                  terminals now exist that are otherwise identical on screen. */}
+              <p className="mt-1 text-center text-lg font-600 uppercase tracking-[0.18em] opacity-70">
+                {config.name}
+              </p>
+
+              {/* GADGET LANE ONLY. Hoisted above the face because at this lane
+                  the serial IS the job — the guard compares it to the laptop in
+                  the person's hands — and a serial set below the fold in 24px
+                  is a check nobody performs. The ordinary person-entry lane
+                  keeps its compact inline list further down. */}
+              {meta.gadgetFocus && outcome.access_result === "granted" && (
+                <div className="mt-6">
+                  {outcome.person?.gadgets && outcome.person.gadgets.length > 0 ? (
+                    <div className="rounded-2xl bg-current/15 px-6 py-4">
+                      {outcome.person.gadgets.map((g, i) => (
+                        <div key={i} className={i > 0 ? "mt-3 border-t border-current/20 pt-3" : ""}>
+                          <p className="text-xl font-600 uppercase tracking-[0.18em] opacity-70">
+                            <span className="capitalize">{g.gadget_type}</span> · {g.brand_model}
+                          </p>
+                          <p className="font-mono text-5xl font-700 leading-tight">
+                            {g.serial_number}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    /* Gold, not red: this is a prompt to send someone to
+                       register, not a refusal. The gadget registry denies
+                       nothing by design (see scan.service.ts:390), and the tap
+                       above this panel still reads GRANTED. Gold carries navy
+                       text per the tone note above. */
+                    <div className="rounded-2xl bg-gold px-6 py-4 text-center text-navy">
+                      <p className="font-display text-4xl font-700 uppercase tracking-tight">
+                        No device registered
+                      </p>
+                      <p className="mt-1 text-xl font-600">
+                        Admitted. Send them to register any device they are carrying.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="mt-8 flex items-center justify-center gap-8">
                 {/* Vehicle gates lead with the vehicle: it is the thing the
                     guard is looking at. The owner's face sits beside it,
@@ -415,15 +460,20 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
                       rather than a photo frame: a picture of a black laptop
                       distinguishes it from no other black laptop, and a third
                       frame would compete with the owner's face. */}
-                  {outcome.person?.gadgets?.map((g, i) => (
-                    <p key={i} className="mt-1 text-2xl">
-                      <span className="capitalize">{g.gadget_type}</span>
-                      {" · "}
-                      {g.brand_model}
-                      {" · SN "}
-                      <span className="font-mono font-700">{g.serial_number}</span>
-                    </p>
-                  ))}
+                  {/* Suppressed on the gadget lane, where the same devices are
+                      already shown full size above. Rendering both would put
+                      the serial on screen twice at two sizes, which invites the
+                      guard to read the smaller one. */}
+                  {!meta.gadgetFocus &&
+                    outcome.person?.gadgets?.map((g, i) => (
+                      <p key={i} className="mt-1 text-2xl">
+                        <span className="capitalize">{g.gadget_type}</span>
+                        {" · "}
+                        {g.brand_model}
+                        {" · SN "}
+                        <span className="font-mono font-700">{g.serial_number}</span>
+                      </p>
+                    ))}
                   {outcome.reason && (
                     <p className="mt-2 text-2xl">
                       {reasonText(outcome.reason)}
