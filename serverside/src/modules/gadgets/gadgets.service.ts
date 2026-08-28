@@ -205,4 +205,44 @@ export const gadgetService = {
     assertCanWrite(actor, 'gadget');
     return this.update(id, { status }, actor);
   },
+
+  /**
+   * Replaces a gadget's sticker and retires the old one.
+   *
+   * Mirrors personService.reassignRfid, including its deliberate fail-open: the
+   * swap is written FIRST and the old tag blocked second. Blocking first would
+   * kill the old sticker even if the swap then failed, leaving the device with
+   * no working tag at all. If the block throws afterwards the old UID is off
+   * this gadget AND off the blocklist — back in the pool and re-registrable —
+   * so it is logged at error level rather than swallowed.
+   */
+  async reassignRfid(id: string, rfid_uid: string, actor: Actor) {
+    assertCanWrite(actor, 'gadget');
+    const existing = await gadgetRepo.findById(id);
+    if (!existing) throw new ApiError('NOT_FOUND', 'Gadget not found');
+    if (await blockedCardRepo.isBlocked(rfid_uid)) throw new ApiError('CARD_BLOCKED');
+    await assertUidFree(rfid_uid, { kind: 'gadget', id });
+
+    const updated = await gadgetRepo.updateById(id, { rfid_uid });
+    if (!updated) throw new ApiError('NOT_FOUND', 'Gadget not found');
+
+    if (existing.rfid_uid && existing.rfid_uid !== rfid_uid) {
+      try {
+        await blockedCardRepo.block({
+          rfid_uid: existing.rfid_uid,
+          source: 'card_replaced',
+          previous_person_id: existing.owner_person_id,
+          blocked_by: actor.id,
+        });
+      } catch (err) {
+        console.error(
+          `[gadgets] FAILED to block retired tag ${existing.rfid_uid} after reassignRfid ` +
+            `for gadget ${id} — this UID is now unassigned AND unblocked, and is ` +
+            're-registrable until manually blocked.',
+          err
+        );
+      }
+    }
+    return updated;
+  },
 };

@@ -6,7 +6,12 @@ import { authorize } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
 import { ROLES } from '../../constants/roles';
 import { gadgetController } from './gadgets.controller';
-import { createGadgetSchema, updateGadgetSchema, gadgetStatusSchema } from './gadgets.schema';
+import {
+  createGadgetSchema,
+  updateGadgetSchema,
+  gadgetStatusSchema,
+  reassignGadgetRfidSchema,
+} from './gadgets.schema';
 
 export const gadgetRoutes = Router();
 
@@ -31,5 +36,10 @@ gadgetRoutes.get('/:id', gadgetController.get);
 gadgetRoutes.post('/', validate(createGadgetSchema), gadgetController.create);
 gadgetRoutes.patch('/:id', validate(updateGadgetSchema), gadgetController.update);
 gadgetRoutes.patch('/:id/status', validate(gadgetStatusSchema), gadgetController.setStatus);
+gadgetRoutes.patch(
+  '/:id/rfid',
+  validate(reassignGadgetRfidSchema),
+  gadgetController.reassignRfid
+);
 gadgetRoutes.post('/:id/photo', uploadPhoto, gadgetController.uploadPhoto);
 gadgetRoutes.delete('/:id/photo', gadgetController.deletePhoto);

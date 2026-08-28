@@ -252,6 +252,23 @@ async function main(): Promise<void> {
     const gp = gadgetAtParking.json.data as { access_result?: string; reason?: string };
     expectEqual('a device tag at the parking barrier is denied', gp?.access_result, 'denied');
     expectEqual('and denied for the right reason', gp?.reason, 'wrong_gate_type');
+
+    console.log('\n--- replacing a gadget sticker blocks the retired one');
+    const swap = await request(superadmin, 'PATCH', `/gadgets/${gadgetId}/rfid`, {
+      rfid_uid: hex(7),
+    });
+    expectEqual('sticker replaced', swap.status, OK);
+
+    // The retired tag must now be refused everywhere, or it goes back into the
+    // pool and is granted again once reissued.
+    const reuse = await request(superadmin, 'POST', '/gadgets', {
+      owner_person_id: personId,
+      gadget_type: 'tablet',
+      brand_model: 'Probe Tablet',
+      serial_number: `CPG3${RUN}`,
+      rfid_uid: hex(2),
+    });
+    expectEqual('the retired tag cannot be re-registered', reuse.status, CONFLICT);
   } finally {
     console.log('\n--- cleanup');
     if (personId) {
