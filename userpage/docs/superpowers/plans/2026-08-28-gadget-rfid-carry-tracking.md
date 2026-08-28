@@ -525,17 +525,20 @@ Add to `verifyGadgetCarry.ts`, inside the `try` block after the "re-sending a ga
     const rosterRows = (roster.json.data ?? []) as { entity_type?: string }[];
     const rosterGadgets = rosterRows.filter((r) => r.entity_type === 'gadget').length;
 
-    const counts = await request(superadmin, 'GET', '/dashboard/overview');
-    expectEqual('overview responded', counts.status, OK);
-    const inside = (counts.json.data as { inside?: { gadgets?: number } })?.inside;
-    expectEqual('the overview reports a gadget count at all', typeof inside?.gadgets, 'number');
-    expectEqual('roster and overview agree on gadgets inside', rosterGadgets, inside?.gadgets);
+    // GET /dashboard/ — there is no /dashboard/overview. The service flattens
+    // countInside into persons_inside / vehicles_inside, so the gadget count
+    // joins them as a sibling rather than nesting.
+    const counts = await request(superadmin, 'GET', '/dashboard');
+    expectEqual('dashboard responded', counts.status, OK);
+    const dash = counts.json.data as { gadgets_inside?: number };
+    expectEqual('the dashboard reports a gadget count at all', typeof dash?.gadgets_inside, 'number');
+    expectEqual('roster and dashboard agree on gadgets inside', rosterGadgets, dash?.gadgets_inside);
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npm run verify:gadget-carry`
-Expected: FAIL on "the overview reports a gadget count at all" — `typeof undefined` is `'undefined'`, not `'number'`.
+Expected: FAIL on "the dashboard reports a gadget count at all" — `typeof undefined` is `'undefined'`, not `'number'`.
 
 - [ ] **Step 3: Widen the two enums**
 
@@ -640,9 +643,31 @@ In the same file, REPLACE the `$lookup`/`$project` stages of `listInside` with:
         },
 ```
 
-- [ ] **Step 5: Update the `countInside` consumer**
+- [ ] **Step 5: Update the `countInside` consumers — both of them**
 
-Find every caller: `grep -rn "countInside" serverside/src`. In `dashboard.service.ts`, the returned object is spread into the overview payload — add `gadgets` alongside `persons` and `vehicles` wherever the shape is written out explicitly. If the service spreads the whole object, no edit is needed; confirm by reading, do not assume.
+`dashboard.service.ts` destructures the result and flattens it, at **two** sites:
+`:218-219` and `:254-255`, each reading
+
+```ts
+      persons_inside: inside.persons,
+      vehicles_inside: inside.vehicles,
+```
+
+Add the sibling at both:
+
+```ts
+      gadgets_inside: inside.gadgets,
+```
+
+Both sites, not one — they serve different endpoints (`GET /dashboard` and the live
+payload), and updating only one produces exactly the split-brain count that this
+task's other half exists to prevent. Confirm with
+`grep -rn "vehicles_inside" serverside/src` that you found every site.
+
+Note the name echo: this `gadgets_inside` is a **count** on the dashboard payload,
+while Task 3 adds a `gadgets_inside` **array** to the tap payload. Different
+endpoints, different objects. The name matches its siblings here, which is what
+matters; do not rename either one.
 
 - [ ] **Step 6: Run the test to verify it passes**
 
@@ -693,7 +718,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `gadgetRepo.findByRfid` (Task 1), `EntityType` (Task 2).
-- Produces: `TapResult.person.gadgets_inside?: { id: string; gadget_type: string; brand_model: string; serial_number: string }[]` — populated only on a **granted person exit** tap. `TapResult.person.gadgets[].photo_url` and `.id` added.
+- Produces: `TapResult.person.gadgets_inside?: { id: string; gadget_type: string; brand_model: string; serial_number: string }[]` — populated only on a **granted person exit** tap. `TapResult.person.gadgets[].photo_url` and `.id` added. `TapResult.person.person_id?: string` — set on every person tap; Tasks 6 and 7 cannot open a prompt without it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -838,7 +863,32 @@ In `scan.service.ts`, find the `else` that begins `const vehicle = await vehicle
         }
 ```
 
-- [ ] **Step 6: Exclude gadgets from the gate-type guard**
+- [ ] **Step 6: Set `person_id` on the person branch**
+
+The terminal needs the person's id to open a device prompt against them.
+`gateTerminal.ts:57` already declares `person_id?: string` on the client type, but
+**the server has never set it** — this closes an existing gap rather than adding a
+field. In `scan.service.ts`, in the `else` branch that handles a person at a
+non-vehicle gate (where `entity_type = 'person'` and `entity_id = person._id`), add
+to the `personView` assignment made just above the `if (gate.type === 'vehicle')`
+split:
+
+```ts
+        personView = {
+          full_name: person.full_name,
+          type: person.type,
+          department_section: person.department_section ?? null,
+          photo_url: person.photo_url,
+          // The terminal opens its device prompt against this id. Set on the
+          // shared person view rather than in one branch, so a person tap
+          // carries it at every gate type.
+          person_id: String(person._id),
+        };
+```
+
+Add `person_id?: string;` to `TapResult['person']` alongside the other fields.
+
+- [ ] **Step 7: Exclude gadgets from the gate-type guard**
 
 In `scan.service.ts`, REPLACE the `wrong_gate_type` block and its comment with:
 
@@ -864,7 +914,7 @@ In `scan.service.ts`, REPLACE the `wrong_gate_type` block and its comment with:
     }
 ```
 
-- [ ] **Step 7: Attach `gadgets_inside` on a granted person exit**
+- [ ] **Step 8: Attach `gadgets_inside` on a granted person exit**
 
 In `scan.service.ts`, inside the existing `if (access_result === 'granted' && !lapsedEgress && entity_type === 'person' && entity_id && personView)` block, REPLACE the `personView.gadgets = devices.map(...)` assignment with:
 
@@ -904,7 +954,7 @@ In `scan.service.ts`, inside the existing `if (access_result === 'granted' && !l
       }
 ```
 
-- [ ] **Step 8: Add the occupancy lookup that supports it**
+- [ ] **Step 9: Add the occupancy lookup that supports it**
 
 In `occupancy.repository.ts`, add after `listInside`:
 
@@ -934,13 +984,13 @@ In `occupancy.repository.ts`, add after `listInside`:
   },
 ```
 
-- [ ] **Step 9: Run the test to verify it passes**
+- [ ] **Step 10: Run the test to verify it passes**
 
 Run: `npx tsc --noEmit` — expect exit 0.
 Run: `npm run verify:gadget-carry`
 Expected: PASS.
 
-- [ ] **Step 10: Check for regressions**
+- [ ] **Step 11: Check for regressions**
 
 ```bash
 npm run verify:passback
@@ -952,7 +1002,7 @@ npm run lint
 
 Expected: all pass. `verify:roles` and `verify:passback` both drive the tap path this task rewrote; treat any failure there as caused by this task.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add serverside/src/modules/scan serverside/src/modules/gadgets/gadgets.repository.ts \
@@ -1402,7 +1452,7 @@ if (
 }
 ```
 
-If `person_id` is absent from the payload on a plain person tap, add it in `scan.service.ts`'s person branch (`personView.person_id = String(person._id)`) — the field already exists on the `TapDecision` type at `gateTerminal.ts:57`.
+`person_id` is supplied by Task 3 Step 6 on every person tap. If it is missing at runtime, Task 3 was not completed — stop and report rather than patching the server from this task.
 
 - [ ] **Step 4: Accumulate gadget taps while the prompt is open**
 
@@ -1641,14 +1691,22 @@ Append to `verifyGadgetCarry.ts`, before the `finally`:
       'card_blocked'
     );
 
-    console.log('\n--- a gadget tap writes no attendance');
-    const today = new Date().toISOString().slice(0, 10);
-    const att = await request(superadmin, 'GET', `/attendance?date=${today}&limit=200`);
-    const attRows = (att.json.data ?? []) as { person_id?: string }[];
+    console.log('\n--- a gadget tap is logged AS a gadget');
+    // Asserts the branch that could actually regress: that the UID resolved down
+    // the third branch rather than being mistaken for a person or falling through
+    // to unregistered_uid.
+    //
+    // Deliberately NOT "no attendance row exists for the gadget": attendance is
+    // keyed by person_id, so a gadget id can never appear in it and that
+    // assertion would be structurally impossible to fail. The property is
+    // guaranteed by construction (attendancePersonId is null on a gadget tap)
+    // and is recorded in the spec rather than tested here.
+    const gadgetLogs = await request(superadmin, 'GET', '/scan/logs?limit=50');
+    const gadgetLogRows = (gadgetLogs.json.data ?? []) as { entity_type?: string }[];
     expectEqual(
-      'no attendance row was created for the gadget itself',
-      attRows.some((r) => String(r.person_id) === gadgetId),
-      false
+      'at least one scan log row was written with entity_type gadget',
+      gadgetLogRows.some((l) => l.entity_type === 'gadget'),
+      true
     );
 ```
 
