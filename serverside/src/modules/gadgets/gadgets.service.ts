@@ -6,6 +6,8 @@ import { getPagination, buildMeta } from '../../utils/pagination';
 import { Actor, assertCanWrite } from '../../utils/authority';
 import { personRepo } from '../persons/persons.repository';
 import { assertOwnerRegistrable } from '../persons/personStatus';
+import { assertUidFree } from '../../utils/assertUidFree';
+import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
 import {
   GADGET_LIMITS,
   GadgetType,
@@ -109,6 +111,14 @@ export const gadgetService = {
     // registration does not burn a serial number on its way out.
     assertOwnerRegistrable(owner, 'gadget');
 
+    // A gadget now shares the UID namespace with persons and vehicles, so this
+    // is a three-way check, not a new one-way check. Runs before takeSerial so
+    // a rejected registration does not burn a serial number.
+    if (data.rfid_uid) {
+      await assertUidFree(data.rfid_uid);
+      if (await blockedCardRepo.isBlocked(data.rfid_uid)) throw new ApiError('CARD_BLOCKED');
+    }
+
     const serial_number = await takeSerial(String(data.serial_number));
 
     if ((data.status ?? 'active') === 'active') {
@@ -135,6 +145,11 @@ export const gadgetService = {
 
     const current = await gadgetRepo.findById(id);
     if (!current) throw new ApiError('NOT_FOUND', 'Gadget not found');
+
+    if (data.rfid_uid && data.rfid_uid !== current.rfid_uid) {
+      await assertUidFree(data.rfid_uid, { kind: 'gadget', id });
+      if (await blockedCardRepo.isBlocked(data.rfid_uid)) throw new ApiError('CARD_BLOCKED');
+    }
 
     const patch: Partial<IGadget> = { ...data };
     if (data.serial_number !== undefined) {

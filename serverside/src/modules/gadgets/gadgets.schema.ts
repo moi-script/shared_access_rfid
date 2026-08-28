@@ -15,6 +15,10 @@ export const createGadgetSchema = z.object({
   // for someone to later forget it on a third.
   serial_number: z.string().min(1).max(64),
   photo_url: z.string().url().optional(),
+  rfid_uid: z
+    .string()
+    .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
+    .optional(),
   status: z.enum(['active', 'inactive']).optional(),
 });
 
@@ -33,3 +37,12 @@ export const createGadgetSchema = z.object({
 export const updateGadgetSchema = createGadgetSchema.partial();
 
 export const gadgetStatusSchema = z.object({ status: z.enum(['active', 'inactive']) });
+
+/**
+ * Replacing a gadget's sticker is its own action, matching reassignRfidSchema
+ * in persons.schema.ts: the swap has to block the retired tag, which a plain
+ * field edit would skip.
+ */
+export const reassignGadgetRfidSchema = z.object({
+  rfid_uid: z.string().regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters'),
+});

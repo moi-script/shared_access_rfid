@@ -10,10 +10,7 @@ import { userRepo } from '../users/users.repository';
 import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
 import { VehicleModel } from '../vehicles/vehicles.model';
 import { GadgetModel } from '../gadgets/gadgets.model';
-// The REPOSITORY, not vehicles.service — vehicles.service.ts already imports
-// from the persons side (personRepo), so importing the service here would
-// create an import cycle.
-import { vehicleRepo } from '../vehicles/vehicles.repository';
+import { assertUidFree } from '../../utils/assertUidFree';
 
 interface ListQuery {
   page?: string;
@@ -137,14 +134,7 @@ export const personService = {
       if (dup) throw new ApiError('DUPLICATE_ID');
     }
     if (personData.rfid_uid) {
-      const existing = await personRepo.findByRfid(personData.rfid_uid);
-      if (existing) throw new ApiError('DUPLICATE_RFID');
-      // The reverse of the check in vehicleService.create: a UID belongs to a
-      // person OR a vehicle, never both.
-      const vehicleWithRfid = await vehicleRepo.findByRfid(personData.rfid_uid);
-      if (vehicleWithRfid) {
-        throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a vehicle');
-      }
+      await assertUidFree(personData.rfid_uid);
       // A block enforced only at the barrier would be no block at all: a
       // retired UID could be re-registered here and would then resolve
       // normally at the gate. See scan.service.tap for the other half.
@@ -431,12 +421,7 @@ export const personService = {
     const existing = await personRepo.findById(id);
     if (!existing) throw new ApiError('NOT_FOUND', 'Person not found');
     if (await blockedCardRepo.isBlocked(rfid_uid)) throw new ApiError('CARD_BLOCKED');
-    const clash = await personRepo.findByRfid(rfid_uid);
-    if (clash && String(clash._id) !== id) throw new ApiError('DUPLICATE_RFID');
-    const vehicleWithRfid = await vehicleRepo.findByRfid(rfid_uid);
-    if (vehicleWithRfid) {
-      throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a vehicle');
-    }
+    await assertUidFree(rfid_uid, { kind: 'person', id });
 
     const updated = await this.update(id, { rfid_uid }, actor);
     // Block AFTER the swap succeeds: blocking first would kill the old card

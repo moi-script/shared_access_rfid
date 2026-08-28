@@ -8,6 +8,7 @@ import { nextSchoolYearEnd } from '../../utils/schoolYear';
 import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
 import { personRepo } from '../persons/persons.repository';
 import { assertOwnerRegistrable } from '../persons/personStatus';
+import { assertUidFree } from '../../utils/assertUidFree';
 import { VEHICLE_LIMITS, VehicleType, pluralizeType } from '../../constants/vehicleTypes';
 import { escapeRegex } from '../../utils/escapeRegex';
 
@@ -97,18 +98,7 @@ export const vehicleService = {
     // before the RFID and allowance checks so the clerk is told the real
     // reason ("this person is inactive") rather than a downstream symptom.
     assertOwnerRegistrable(owner, 'vehicle');
-    const existingRfid = await vehicleRepo.findByRfid(String(data.rfid_uid));
-    if (existingRfid) throw new ApiError('DUPLICATE_RFID');
-    // A UID belongs to a person OR a vehicle, never both. scan.service.tap
-    // resolves person first, so a vehicle holding a person's UID is
-    // permanently unscannable — it would be accepted here and then silently
-    // never work at the barrier. This is how CAV 8832 was created.
-    if (data.rfid_uid) {
-      const personWithRfid = await personRepo.findByRfid(String(data.rfid_uid));
-      if (personWithRfid) {
-        throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a person');
-      }
-    }
+    await assertUidFree(String(data.rfid_uid));
     // A block enforced only at the barrier would be no block at all: a
     // retired UID could be re-registered here and would then resolve
     // normally at the gate. See scan.service.tap for the other half.
@@ -141,14 +131,7 @@ export const vehicleService = {
       const currentForRfid = await vehicleRepo.findById(id);
       if (!currentForRfid) throw new ApiError('NOT_FOUND', 'Vehicle not found');
       if (data.rfid_uid !== currentForRfid.rfid_uid) {
-        const existingRfid = await vehicleRepo.findByRfid(data.rfid_uid);
-        if (existingRfid && String(existingRfid._id) !== String(currentForRfid._id)) {
-          throw new ApiError('DUPLICATE_RFID');
-        }
-        const personWithRfid = await personRepo.findByRfid(data.rfid_uid);
-        if (personWithRfid) {
-          throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a person');
-        }
+        await assertUidFree(data.rfid_uid, { kind: 'vehicle', id });
         if (await blockedCardRepo.isBlocked(data.rfid_uid)) throw new ApiError('CARD_BLOCKED');
       }
     }
