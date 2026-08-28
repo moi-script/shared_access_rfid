@@ -217,6 +217,7 @@ export const dashboardService = {
       // card never renders a dash that the poll then replaces a beat later.
       persons_inside: inside.persons,
       vehicles_inside: inside.vehicles,
+      gadgets_inside: inside.gadgets,
       active_today,
       total_vehicles,
       total_gadgets,
@@ -253,6 +254,7 @@ export const dashboardService = {
     return {
       persons_inside: inside.persons,
       vehicles_inside: inside.vehicles,
+      gadgets_inside: inside.gadgets,
       scan_events_today,
       granted_today,
       denied_today,

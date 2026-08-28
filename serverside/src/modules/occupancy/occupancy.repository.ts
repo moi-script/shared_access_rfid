@@ -3,7 +3,7 @@ import { OccupancyModel, IOccupancy } from './occupancy.model';
 import { isDuplicateKey } from '../../utils/isDuplicateKey';
 import { PaginationParams } from '../../utils/pagination';
 
-export type EntityType = 'person' | 'vehicle';
+export type EntityType = 'person' | 'vehicle' | 'gadget';
 export type EnterResult = 'admitted' | 'already_inside';
 export type ExitResult = 'released' | 'exit_without_entry';
 
@@ -113,16 +113,25 @@ export const occupancyRepo = {
    * inside" on the Overview and then counts 13 rows on the Presence tab has
    * no way to tell which one lied. If the roster's filter ever changes, this
    * one changes with it.
+   *
+   * `gadgets` was added with the third entity type and is NOT optional: the
+   * old if/else-if silently dropped unknown types, so widening the enum
+   * without touching this function would have broken the invariant above in
+   * exactly the way it warns about — quietly, and only visible by counting
+   * rows on two screens.
    */
-  async countInside(boundary: Date): Promise<{ persons: number; vehicles: number }> {
+  async countInside(
+    boundary: Date
+  ): Promise<{ persons: number; vehicles: number; gadgets: number }> {
     const rows = await OccupancyModel.aggregate<{ _id: EntityType; count: number }>([
       { $match: { state: 'inside', since: { $gte: boundary } } },
       { $group: { _id: '$entity_type', count: { $sum: 1 } } },
     ]);
-    const counts = { persons: 0, vehicles: 0 };
+    const counts = { persons: 0, vehicles: 0, gadgets: 0 };
     for (const row of rows) {
       if (row._id === 'person') counts.persons = row.count;
       else if (row._id === 'vehicle') counts.vehicles = row.count;
+      else if (row._id === 'gadget') counts.gadgets = row.count;
     }
     return counts;
   },
@@ -141,19 +150,35 @@ export const occupancyRepo = {
         { $limit: p.limit },
         { $lookup: { from: 'people', localField: 'entity_id', foreignField: '_id', as: 'person' } },
         { $lookup: { from: 'vehicles', localField: 'entity_id', foreignField: '_id', as: 'vehicle' } },
+        { $lookup: { from: 'gadgets', localField: 'entity_id', foreignField: '_id', as: 'gadget' } },
         { $lookup: { from: 'gates', localField: 'last_gate_id', foreignField: '_id', as: 'gate' } },
         {
           $project: {
             _id: 1,
             entity_type: 1,
             since: 1,
+            // Order matters and mirrors entity_type's own order: a document is
+            // only ever one of the three, so the first non-null wins and the
+            // other two lookups are empty arrays.
             name: {
               $ifNull: [
                 { $arrayElemAt: ['$person.full_name', 0] },
-                { $arrayElemAt: ['$vehicle.plate_number', 0] },
+                {
+                  $ifNull: [
+                    { $arrayElemAt: ['$vehicle.plate_number', 0] },
+                    { $arrayElemAt: ['$gadget.brand_model', 0] },
+                  ],
+                },
               ],
             },
-            id_number: { $arrayElemAt: ['$person.id_number', 0] },
+            // A gadget has no id_number, so its SERIAL takes that slot — it is
+            // the identifier a guard reads off the device itself.
+            id_number: {
+              $ifNull: [
+                { $arrayElemAt: ['$person.id_number', 0] },
+                { $arrayElemAt: ['$gadget.serial_number', 0] },
+              ],
+            },
             gate: { $ifNull: [{ $arrayElemAt: ['$gate.name', 0] }, 'Unknown gate'] },
           },
         },

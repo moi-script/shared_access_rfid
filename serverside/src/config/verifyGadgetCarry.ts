@@ -150,6 +150,25 @@ async function main(): Promise<void> {
       brand_model: 'Probe Laptop Renamed',
     });
     expectEqual('a gadget may re-send its own uid', noop.status, OK);
+
+    console.log('\n--- the roster and the dashboard count agree about gadgets');
+    // The invariant occupancy.repository.ts:110 warns about: countInside and
+    // listInside are two views of one answer. Widening the enum without
+    // changing both makes a gadget row visible in one and invisible in the
+    // other, and an admin cannot tell which of the two lied.
+    const roster = await request(superadmin, 'GET', '/occupancy?limit=200');
+    expectEqual('roster responded', roster.status, OK);
+    const rosterRows = (roster.json.data ?? []) as { entity_type?: string }[];
+    const rosterGadgets = rosterRows.filter((r) => r.entity_type === 'gadget').length;
+
+    // GET /dashboard/ — there is no /dashboard/overview. The service flattens
+    // countInside into persons_inside / vehicles_inside, so the gadget count
+    // joins them as a sibling rather than nesting.
+    const counts = await request(superadmin, 'GET', '/dashboard');
+    expectEqual('dashboard responded', counts.status, OK);
+    const dash = counts.json.data as { gadgets_inside?: number };
+    expectEqual('the dashboard reports a gadget count at all', typeof dash?.gadgets_inside, 'number');
+    expectEqual('roster and dashboard agree on gadgets inside', rosterGadgets, dash?.gadgets_inside);
   } finally {
     console.log('\n--- cleanup');
     if (personId) {
