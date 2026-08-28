@@ -557,6 +557,54 @@ export const scanService = {
     return { access_result, reason, scan_time, person: personView };
   },
 
+  /**
+   * Records that a person left with devices still inside.
+   *
+   * Writes a SECOND scan-log row rather than amending the exit row, which was
+   * already written when they tapped. Two rows for one exit is correct here:
+   * the first records that the person left, the second records what they left
+   * without. occupancyService.clear writes its own append-only row for the
+   * same reason — the state it describes is overwritten by the next tap.
+   *
+   * Deliberately touches NO occupancy state. The devices genuinely are still
+   * inside; their rows must stay `inside` so tomorrow's roster shows them and
+   * the nightly boundary is what eventually clears them.
+   *
+   * access_result is 'granted', not 'denied'. Nothing was refused — the person
+   * is already outside. A denial here would be the first path in the system
+   * from a laptop to a refused tap, which scan.service.ts:390 forbids.
+   */
+  async closeGadgetSession(input: {
+    gate_id: string;
+    person_id: string;
+    missing_gadget_ids: string[];
+  }): Promise<{ logged: boolean; missing: number }> {
+    const gate = await gateRepo.findById(input.gate_id);
+    if (!gate) throw new ApiError('NOT_FOUND', 'Gate not found');
+    if (!Types.ObjectId.isValid(input.person_id)) {
+      throw new ApiError('VALIDATION_ERROR', 'person_id is not a valid id');
+    }
+    const person = await personRepo.findById(input.person_id);
+    if (!person) throw new ApiError('NOT_FOUND', 'Person not found');
+
+    await scanRepo.createLog({
+      // The person's own card UID, so the row sits alongside their exit in any
+      // per-card view. Falls back to the empty string only for a cardless
+      // person, who cannot have tapped an exit in the first place.
+      rfid_uid: person.rfid_uid ?? '',
+      entity_type: 'person',
+      entity_id: person._id,
+      gate_id: gate._id,
+      direction: 'exit',
+      access_result: 'granted',
+      reason: 'gadget_not_returned',
+      scan_time: new Date(),
+    });
+
+    liveHub.notifyScan();
+    return { logged: true, missing: input.missing_gadget_ids.length };
+  },
+
   async listLogs(query: Record<string, string | undefined>) {
     const { getPagination, buildMeta } = await import('../../utils/pagination');
     const p = getPagination(query);

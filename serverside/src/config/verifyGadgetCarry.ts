@@ -211,6 +211,35 @@ async function main(): Promise<void> {
     });
     expectEqual('gadget tag released', (deviceOut.json.data as { access_result?: string })?.access_result, 'granted');
 
+    console.log('\n--- an incomplete exit is logged as its own row, not folded into the exit');
+    // Re-enter both so there is something to leave behind.
+    await request(superadmin, 'POST', '/scan/tap', { rfid_uid: hex(1), gate_id: gadgetLane!._id, direction: 'entry' });
+    await request(superadmin, 'POST', '/scan/tap', { rfid_uid: hex(2), gate_id: gadgetLane!._id, direction: 'entry' });
+    const exitAgain = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(1), gate_id: sideGate!._id, direction: 'exit',
+    });
+    expectEqual(
+      'the person left with the device still inside',
+      (exitAgain.json.data as { person?: { gadgets_inside?: unknown[] } })?.person?.gadgets_inside?.length,
+      1
+    );
+
+    const close = await request(superadmin, 'POST', '/scan/gadget-session', {
+      gate_id: sideGate!._id,
+      person_id: personId,
+      missing_gadget_ids: [gadgetId],
+    });
+    expectEqual('close event accepted', close.status, OK);
+
+    const logs = await request(superadmin, 'GET', `/scan/logs?limit=20`);
+    const logRows = (logs.json.data ?? []) as { reason?: string; access_result?: string }[];
+    const notReturned = logRows.filter((l) => l.reason === 'gadget_not_returned');
+    expectEqual('a gadget_not_returned row was written', notReturned.length >= 1, true);
+    expectEqual('and it is GRANTED, never a denial', notReturned[0]?.access_result, 'granted');
+
+    // Clean the device back out so the run leaves no row inside.
+    await request(superadmin, 'POST', '/scan/tap', { rfid_uid: hex(2), gate_id: sideGate!._id, direction: 'exit' });
+
     // Last of the gadget-tap checks on purpose: a denied tap moves no
     // occupancy state, so it cannot disturb the entry/exit ordering the
     // checks above depend on.
