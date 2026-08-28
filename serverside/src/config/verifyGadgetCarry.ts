@@ -360,6 +360,47 @@ async function main(): Promise<void> {
       gadgetAnomalies.every((r) => Boolean(r.name)),
       true
     );
+
+    console.log('\n--- a lowercase UID registered and tapped in lowercase still opens the gate');
+    // The round trip both boundaries have to agree on. Registration uppercases
+    // what it stores, so a UID hand-entered as `a1b2c3` is persisted `A1B2C3`;
+    // if the tap path did not uppercase too, this exact tap comes back
+    // `unregistered_uid` and a real card silently stops working at a real
+    // barrier. `hex` already returns uppercase, so the casing is forced down
+    // on BOTH sides here — that is the whole point of the check.
+    const lowerUid = hex(4).toLowerCase();
+    const caseProbe = await request(superadmin, 'POST', '/persons', {
+      full_name: `Carry Case Probe ${RUN}`,
+      type: 'student',
+      id_number: `CCP-${RUN}`,
+      rfid_uid: lowerUid,
+    });
+    expectEqual('lowercase-UID person created', caseProbe.status, CREATED);
+    const caseProbeId = idOf(caseProbe.json);
+    expectEqual(
+      'and the UID was normalized on the way in',
+      (caseProbe.json.data as { rfid_uid?: string })?.rfid_uid,
+      lowerUid.toUpperCase()
+    );
+
+    const lowerTap = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: lowerUid,
+      gate_id: gadgetLane!._id,
+      direction: 'entry',
+    });
+    const lt = lowerTap.json.data as { access_result?: string; reason?: string };
+    expectEqual('a lowercase tap of an uppercase-stored UID is GRANTED', lt?.access_result, 'granted');
+
+    // Leave nothing inside: release the row, then remove the probe person.
+    await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: lowerUid,
+      gate_id: sideGate!._id,
+      direction: 'exit',
+    });
+    if (caseProbeId) {
+      const delCase = await request(superadmin, 'DELETE', `/persons/${caseProbeId}`);
+      expectEqual('lowercase-UID probe cleaned up', delCase.status, OK);
+    }
   } finally {
     console.log('\n--- cleanup');
     if (personId) {

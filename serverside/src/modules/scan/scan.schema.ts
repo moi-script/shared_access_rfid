@@ -1,8 +1,19 @@
 import { z } from 'zod';
 
+// Uppercased at the boundary, exactly mirroring the registration-side
+// normalization in persons/vehicles/gadgets schemas. These two boundaries are
+// one mechanism and must be changed together or not at all: registration
+// stores `A1B2C3`, so a tap that arrives as `a1b2c3` and is looked up verbatim
+// misses all four exact-match lookups (person, vehicle, gadget, blocked card)
+// and comes back `unregistered_uid`. That is not a cosmetic mismatch — it is a
+// real person standing at a real barrier whose working card silently stopped
+// opening it. Normalizing here also means the `scanRepo.createLog` row records
+// the same spelling the registry holds, so the log can be joined back to the
+// card it belongs to.
 const rfid = z
   .string()
-  .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters');
+  .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
+  .transform((v) => v.toUpperCase());
 
 /** JWT callers name the gate themselves. */
 export const tapSchema = z.object({

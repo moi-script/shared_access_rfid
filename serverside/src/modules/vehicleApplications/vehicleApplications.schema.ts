@@ -65,9 +65,17 @@ export const createApplicationSchema = z.object({
   // characters, what real readers emit. A UID accepted here but rejected by
   // tapSchema at the gate would issue a sticker for a pass that can never
   // tap in — the gate would 422 before scanService.tap ever runs.
+  // Uppercased like every other rfid_uid boundary (see createVehicleSchema).
+  // This one is not optional: approving an application calls
+  // vehicleService.create directly with this value, bypassing
+  // createVehicleSchema entirely, so without the transform here an approved
+  // application would persist a lowercase Vehicle.rfid_uid that the (now
+  // uppercase) tap path can never match. It also lines the value up with
+  // blockedCardRepo.isBlocked, which is an exact-match lookup.
   rfid_uid: z
     .string()
-    .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters'),
+    .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
+    .transform((v) => v.toUpperCase()),
 
   valid_until: z.string().datetime().optional(),
 });
