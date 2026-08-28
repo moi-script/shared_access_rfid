@@ -269,6 +269,58 @@ async function main(): Promise<void> {
       rfid_uid: hex(2),
     });
     expectEqual('the retired tag cannot be re-registered', reuse.status, CONFLICT);
+
+    console.log('\n--- a gadget belonging to someone else does not release');
+    const stranger = await request(superadmin, 'POST', '/persons', {
+      full_name: `Carry Stranger ${RUN}`, type: 'student',
+      id_number: `CS-${RUN}`, rfid_uid: hex(8),
+    });
+    const strangerId = idOf(stranger.json);
+    const strangerGadget = await request(superadmin, 'POST', '/gadgets', {
+      owner_person_id: strangerId, gadget_type: 'laptop',
+      brand_model: 'Stranger Laptop', serial_number: `CSG${RUN}`, rfid_uid: hex(9),
+    });
+    expectEqual('stranger gadget created', strangerGadget.status, CREATED);
+    // It was never tapped in, so an exit tap must report exit_without_entry
+    // rather than silently releasing a row that does not exist.
+    const strangerOut = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(9), gate_id: sideGate!._id, direction: 'exit',
+    });
+    expectEqual(
+      'a device that never entered reports exit_without_entry',
+      (strangerOut.json.data as { reason?: string })?.reason,
+      'exit_without_entry'
+    );
+    await request(superadmin, 'DELETE', `/persons/${strangerId}`);
+
+    console.log('\n--- a blocked gadget tag is refused');
+    const blockedProbe = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(2), gate_id: gadgetLane!._id, direction: 'entry',
+    });
+    // hex(2) was retired by the sticker swap in Task 5 and is on the blocklist.
+    expectEqual(
+      'the retired tag is refused at the gate',
+      (blockedProbe.json.data as { reason?: string })?.reason,
+      'card_blocked'
+    );
+
+    console.log('\n--- a gadget tap is logged AS a gadget');
+    // Asserts the branch that could actually regress: that the UID resolved down
+    // the third branch rather than being mistaken for a person or falling through
+    // to unregistered_uid.
+    //
+    // Deliberately NOT "no attendance row exists for the gadget": attendance is
+    // keyed by person_id, so a gadget id can never appear in it and that
+    // assertion would be structurally impossible to fail. The property is
+    // guaranteed by construction (attendancePersonId is null on a gadget tap)
+    // and is recorded in the spec rather than tested here.
+    const gadgetLogs = await request(superadmin, 'GET', '/scan/logs?limit=50');
+    const gadgetLogRows = (gadgetLogs.json.data ?? []) as { entity_type?: string }[];
+    expectEqual(
+      'at least one scan log row was written with entity_type gadget',
+      gadgetLogRows.some((l) => l.entity_type === 'gadget'),
+      true
+    );
   } finally {
     console.log('\n--- cleanup');
     if (personId) {
