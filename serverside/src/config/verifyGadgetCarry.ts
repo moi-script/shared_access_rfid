@@ -169,6 +169,47 @@ async function main(): Promise<void> {
     const dash = counts.json.data as { gadgets_inside?: number };
     expectEqual('the dashboard reports a gadget count at all', typeof dash?.gadgets_inside, 'number');
     expectEqual('roster and dashboard agree on gadgets inside', rosterGadgets, dash?.gadgets_inside);
+
+    console.log('\n--- a gadget tag taps in its own right');
+    const gates = await request(superadmin, 'GET', '/gates');
+    const gateRows = (gates.json.data ?? []) as { _id: string; name: string }[];
+    const gadgetLane = gateRows.find((g) => g.name === 'Gadget Lane');
+    const sideGate = gateRows.find((g) => g.name === 'Side Gate');
+    expectEqual('Gadget Lane gate exists (run npm run seed)', Boolean(gadgetLane), true);
+    expectEqual('Side Gate exists', Boolean(sideGate), true);
+
+    // Person in first, then the device — the Gadget Lane flow.
+    const personIn = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(1), gate_id: gadgetLane!._id, direction: 'entry',
+    });
+    expectEqual('person admitted at the gadget lane', (personIn.json.data as { access_result?: string })?.access_result, 'granted');
+
+    const deviceIn = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(2), gate_id: gadgetLane!._id, direction: 'entry',
+    });
+    expectEqual('gadget tag admitted', (deviceIn.json.data as { access_result?: string })?.access_result, 'granted');
+
+    console.log('\n--- the exit tap reports what is still inside');
+    const personOut = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(1), gate_id: sideGate!._id, direction: 'exit',
+    });
+    const outData = personOut.json.data as {
+      access_result?: string;
+      person?: { gadgets_inside?: { serial_number: string }[] };
+    };
+    expectEqual('person released', outData?.access_result, 'granted');
+    expectEqual('exactly one device is still inside', outData?.person?.gadgets_inside?.length, 1);
+    expectEqual(
+      'and it is the one that tapped in',
+      outData?.person?.gadgets_inside?.[0]?.serial_number,
+      `CPG${RUN}`
+    );
+
+    console.log('\n--- tapping the device out clears it');
+    const deviceOut = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(2), gate_id: sideGate!._id, direction: 'exit',
+    });
+    expectEqual('gadget tag released', (deviceOut.json.data as { access_result?: string })?.access_result, 'granted');
   } finally {
     console.log('\n--- cleanup');
     if (personId) {

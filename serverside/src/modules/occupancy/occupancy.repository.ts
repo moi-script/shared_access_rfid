@@ -187,4 +187,28 @@ export const occupancyRepo = {
     ]);
     return { items, total };
   },
+
+  /**
+   * Which of these gadgets are currently inside.
+   *
+   * Applies the same staleness rule as `enter`, `release` and `listInside` —
+   * see countInside's note on why every view of "inside" must share one
+   * filter. Takes ids rather than an owner so the caller, which has already
+   * loaded the person's active devices, does not pay for a second lookup.
+   */
+  async listInsideGadgetIds(
+    gadgetIds: Types.ObjectId[],
+    boundary: Date
+  ): Promise<Types.ObjectId[]> {
+    if (gadgetIds.length === 0) return [];
+    const rows = await OccupancyModel.find({
+      entity_type: 'gadget',
+      entity_id: { $in: gadgetIds },
+      state: 'inside',
+      since: { $gte: boundary },
+    })
+      .select('entity_id')
+      .lean();
+    return rows.map((r) => r.entity_id);
+  },
 };

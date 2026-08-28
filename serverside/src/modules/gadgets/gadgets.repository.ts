@@ -46,7 +46,7 @@ export const gadgetRepo = {
    */
   findActiveByOwner: (owner_person_id: Types.ObjectId) =>
     GadgetModel.find({ owner_person_id, status: 'active' })
-      .select('gadget_type brand_model serial_number')
+      .select('gadget_type brand_model serial_number rfid_uid photo_url')
       .sort({ createdAt: -1 })
       .lean(),
 };
