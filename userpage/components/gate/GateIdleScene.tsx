@@ -15,6 +15,8 @@
  * "waiting" rather than "done".
  */
 
+import GateIdCard from "./GateIdCard";
+
 type Direction = "entry" | "exit";
 
 const LANE: Record<Direction, { word: string; accent: string; ring: string }> = {
@@ -96,36 +98,11 @@ export default function GateIdleScene({
           <span className="h-3 w-3 rounded-full bg-gold shadow-[0_0_28px_6px] shadow-gold/35" />
         </div>
 
-        {/* The card, held just off the plate. */}
-        <div
-          aria-hidden
-          className="gate-float relative h-40 w-64 overflow-hidden rounded-2xl border border-gold/30 bg-gradient-to-br from-navy-700 to-ink shadow-2xl shadow-black/50 sm:h-44 sm:w-72"
-        >
-          <div className="dot-grid absolute inset-0 opacity-40" />
-
-          {/* Chip */}
-          <div className="absolute left-6 top-8 h-9 w-11 rounded-md bg-gradient-to-br from-gold to-gold-deep opacity-90" />
-
-          {/* Embossed detail. Suggests a name and number without spelling out
-              data the terminal does not have yet. */}
-          <div className="absolute bottom-7 left-6 space-y-2">
-            <div className="h-2.5 w-28 rounded-full bg-white/22" />
-            <div className="h-2 w-16 rounded-full bg-white/12" />
-          </div>
-
-          {/* Signal arcs, top right, mirroring NcstMark. */}
-          <svg
-            viewBox="0 0 40 40"
-            fill="none"
-            className="absolute right-5 top-6 h-9 w-9 text-gold"
-          >
-            <circle cx="9" cy="20" r="3" fill="currentColor" />
-            <path d="M16 13.5a9 9 0 0 1 0 13" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
-            <path d="M21.5 9a14.5 14.5 0 0 1 0 22" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" opacity="0.6" />
-          </svg>
-
-          {/* Scan bar sweeping the face. */}
-          <div className="gate-scanline absolute inset-x-0 h-16 bg-gradient-to-b from-transparent via-gold/22 to-transparent" />
+        {/* The card, held just off the plate. Portrait now that it depicts the
+            real NCST ID rather than an abstract navy card, so it is sized off
+            its height to stay inside this field at both breakpoints. */}
+        <div aria-hidden className="gate-float relative">
+          <GateIdCard />
         </div>
       </div>
     </div>
