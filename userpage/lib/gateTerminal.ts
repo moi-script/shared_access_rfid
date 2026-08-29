@@ -22,26 +22,44 @@ export interface GateConfig {
  * `meta.gadgetFocus` would not typecheck at the one call site that needs it.
  * Spelling it out beats widening the type and losing the literal keys.
  *
- * Note that person-entry-gadget provisions independently of person-entry:
- * getStoredGate keys storage by routeId, so the two terminals hold separate
- * gate records and their taps are distinguishable in the scan logs. That
- * separation is the point of the route — see the 'Gadget Lane' gate in
- * serverside/src/config/seed.ts.
+ * `gateName` is what provisioning actually resolves against, and it is the
+ * field that MUST stay unique across routes.
+ *
+ * type + direction used to be the whole identity, and that was a defect rather
+ * than a shortcut: person-entry and person-entry-gadget declare the SAME
+ * type/direction pair, so GateProvisioning's `.find()` returned whichever gate
+ * GET /gates listed first — 'Main Entrance' — for both. Two routes then armed
+ * one gate, and since gateKeyService.mint revokes a gate's previous keys, each
+ * terminal silently de-provisioned the other and both fell back to the password
+ * screen on their next tap, forever. It also meant every gadget-lane tap was
+ * logged against Main Entrance, destroying the distinguishable scan logs that
+ * are the entire reason the route exists.
+ *
+ * Gate.name is `unique: true` in the Mongoose schema, so it is a real
+ * identifier rather than a label that happens to differ today. These strings
+ * must match serverside/src/config/seed.ts exactly; verifyGates asserts the
+ * seed still provides them, so a rename there fails loudly in CI instead of
+ * silently at a terminal.
  */
 export const GATE_ROUTES = {
   "person-entry": {
+    gateName: "Main Entrance",
     type: "person", direction: "entry", label: "Person · Entry", gadgetFocus: false,
   },
   "person-entry-gadget": {
+    gateName: "Gadget Lane",
     type: "person", direction: "entry", label: "Person · Entry · Gadget Lane", gadgetFocus: true,
   },
   "person-exit": {
+    gateName: "Side Gate",
     type: "person", direction: "exit", label: "Person · Exit", gadgetFocus: false,
   },
   "vehicle-entry": {
+    gateName: "Parking Entrance",
     type: "vehicle", direction: "entry", label: "Vehicle · Entry", gadgetFocus: false,
   },
   "vehicle-exit": {
+    gateName: "Parking Exit",
     type: "vehicle", direction: "exit", label: "Vehicle · Exit", gadgetFocus: false,
   },
 } as const;
