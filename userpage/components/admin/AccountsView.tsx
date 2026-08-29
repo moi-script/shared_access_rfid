@@ -331,8 +331,15 @@ export default function AccountsView() {
               // action it cannot perform. An office account (person === null)
               // has no type, so this clause doesn't apply to it; rank/self
               // already cover those rows.
+              // One superadmin may act on another — the same peer exception the
+              // server's isSuperadminPeer carries. Without it the rank clause
+              // below would grey out every superadmin row for a superadmin, so
+              // the peer accounts they can now create would look unmanageable.
+              // Self and domain still apply: `r.id === selfId` is checked
+              // independently, so this never unlocks your own row.
+              const superadminPeer = myRole === "superadmin" && r.role === "superadmin";
               const protectedRow =
-                rankOf(r.role) >= rankOf(myRole) ||
+                (!superadminPeer && rankOf(r.role) >= rankOf(myRole)) ||
                 r.id === selfId ||
                 (r.person?.type !== undefined &&
                   !(allowedTypes as string[]).includes(r.person.type));

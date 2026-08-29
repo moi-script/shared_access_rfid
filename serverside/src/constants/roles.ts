@@ -106,7 +106,21 @@ export const WRITE_DOMAINS: Record<Role, readonly Domain[]> = {
   superadmin: ['person:student', 'person:staff', 'person:employee', 'vehicle', 'gadget'],
   registrar: ['person:student'],
   hr: ['person:staff', 'person:employee'],
-  oss: ['vehicle', 'gadget'],
+  // OSS holds the registrar's and HR's person domains IN ADDITION to its own
+  // vehicle and gadget ones — the union of all three offices, by request.
+  //
+  // Registrar and HR are deliberately left in place and unchanged. This is a
+  // widening of OSS, not a merge that retires the other two: both roles still
+  // exist, still log in, and still write exactly the domains they always did.
+  //
+  // Worth stating plainly, because the table no longer shows it: OSS's write
+  // authority is now IDENTICAL to superadmin's. What still separates them is
+  // everything outside this table — the superadmin-only routes (delete,
+  // restore, account management, reports, logs, gates) and rank-based peer
+  // protection, which OSS does not have at rank 2. A future domain added to
+  // superadmin must be a deliberate decision about OSS too, since "same as
+  // superadmin" is now the baseline rather than a coincidence.
+  oss: ['person:student', 'person:staff', 'person:employee', 'vehicle', 'gadget'],
   staff: [],
   student: [],
 };

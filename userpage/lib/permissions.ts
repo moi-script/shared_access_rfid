@@ -48,7 +48,17 @@ const ABILITIES: Record<Role, Action[]> = {
   ],
   registrar: ["registerPeople", "viewDirectory", "manageStatus"],
   hr: ["registerPeople", "viewDirectory", "manageStatus"],
-  oss: ["registerVehicles", "registerGadgets", "viewDirectory", "manageStatus"],
+  // OSS holds the registrar's and HR's authority on top of its own. Mirrors
+  // WRITE_DOMAINS.oss on the server, which now carries all three person
+  // domains as well as vehicle and gadget. registrar and hr are unchanged —
+  // this widened OSS rather than retiring them.
+  oss: [
+    "registerPeople",
+    "registerVehicles",
+    "registerGadgets",
+    "viewDirectory",
+    "manageStatus",
+  ],
   staff: [],
   student: [],
 };
@@ -68,15 +78,32 @@ export function rankOf(role: Role): 1 | 2 | 3 {
   return RANK[role];
 }
 
-/** Roles this actor may create or act on. Mirrors the server's rolesBelow(). */
+/**
+ * Roles this actor may create or act on. Mirrors the server's rolesBelow()
+ * PLUS the one peer exception in assertCanCreateRole/assertCanActOn: a
+ * superadmin may create and manage another superadmin.
+ *
+ * Spelled out as `actor === "superadmin"` rather than a rank comparison for
+ * the same reason the server's isSuperadminPeer is — a rank test would extend
+ * the exception to any future rank-3 role by accident.
+ *
+ * This is the usability layer only; the API enforces the real boundary.
+ */
 export function rolesBelow(actor: Role): Role[] {
-  return ALL.filter((r) => RANK[r] < RANK[actor]);
+  const below = ALL.filter((r) => RANK[r] < RANK[actor]);
+  return actor === "superadmin" ? ["superadmin", ...below] : below;
 }
 
 /** Person types this role may register. Empty means it registers no people. */
 export function personTypesFor(role: Role): ("student" | "staff" | "employee")[] {
   switch (role) {
     case "superadmin":
+      return ["student", "staff", "employee"];
+    // OSS registers every person type: it holds the registrar's student domain
+    // and HR's staff/employee domains as well as its own. Listed beside
+    // superadmin rather than merged with it so the two stay independently
+    // editable — they are equal today by decision, not by definition.
+    case "oss":
       return ["student", "staff", "employee"];
     case "registrar":
       return ["student"];
