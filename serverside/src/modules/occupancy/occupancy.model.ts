@@ -2,7 +2,7 @@ import { Schema, model, Document, Types } from 'mongoose';
 
 export interface IOccupancy extends Document {
   _id: Types.ObjectId;
-  entity_type: 'person' | 'vehicle';
+  entity_type: 'person' | 'vehicle' | 'gadget';
   entity_id: Types.ObjectId;
   state: 'inside' | 'outside';
   since: Date;
@@ -12,7 +12,7 @@ export interface IOccupancy extends Document {
 }
 
 const occupancySchema = new Schema<IOccupancy>({
-  entity_type: { type: String, enum: ['person', 'vehicle'], required: true },
+  entity_type: { type: String, enum: ['person', 'vehicle', 'gadget'], required: true },
   entity_id: { type: Schema.Types.ObjectId, required: true },
   state: { type: String, enum: ['inside', 'outside'], required: true },
   since: { type: Date, required: true },

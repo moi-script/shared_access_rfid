@@ -3,7 +3,7 @@ import { Schema, model, Document, Types } from 'mongoose';
 export interface IScanLog extends Document {
   _id: Types.ObjectId;
   rfid_uid: string;
-  entity_type: 'person' | 'vehicle';
+  entity_type: 'person' | 'vehicle' | 'gadget';
   entity_id: Types.ObjectId | null;
   gate_id: Types.ObjectId | null;
   direction: 'entry' | 'exit';
@@ -17,7 +17,7 @@ const TWO_YEARS_SECONDS = 60 * 60 * 24 * 365 * 2;
 
 const scanLogSchema = new Schema<IScanLog>({
   rfid_uid: { type: String, required: true, index: true },
-  entity_type: { type: String, enum: ['person', 'vehicle'], required: true },
+  entity_type: { type: String, enum: ['person', 'vehicle', 'gadget'], required: true },
   entity_id: { type: Schema.Types.ObjectId, default: null },
   // Nullable because a manual override is a real scan-log event with no gate.
   gate_id: { type: Schema.Types.ObjectId, ref: 'Gate', default: null },

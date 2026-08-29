@@ -15,6 +15,17 @@ export const createGadgetSchema = z.object({
   // for someone to later forget it on a third.
   serial_number: z.string().min(1).max(64),
   photo_url: z.string().url().optional(),
+  // Uppercased at the boundary so every NEW row stores one spelling of a hex
+  // UID. Casing is the CAV 8832 clash vector: `abcdef` and `ABCDEF` are the
+  // same physical card and used to register as two rows. assertUidFree now
+  // catches that clash regardless of stored casing (it is what protects the
+  // pre-existing mixed-case rows, which are deliberately not migrated); this
+  // stops new ones being created.
+  rfid_uid: z
+    .string()
+    .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
+    .transform((v) => v.toUpperCase())
+    .optional(),
   status: z.enum(['active', 'inactive']).optional(),
 });
 
@@ -33,3 +44,16 @@ export const createGadgetSchema = z.object({
 export const updateGadgetSchema = createGadgetSchema.partial();
 
 export const gadgetStatusSchema = z.object({ status: z.enum(['active', 'inactive']) });
+
+/**
+ * Replacing a gadget's sticker is its own action, matching reassignRfidSchema
+ * in persons.schema.ts: the swap has to block the retired tag, which a plain
+ * field edit would skip.
+ */
+export const reassignGadgetRfidSchema = z.object({
+  // Uppercased like every other rfid_uid — see createGadgetSchema's note.
+  rfid_uid: z
+    .string()
+    .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
+    .transform((v) => v.toUpperCase()),
+});

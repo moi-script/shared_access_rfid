@@ -23,6 +23,12 @@ export const gadgetRepo = {
    */
   findBySerial: (serial_number: string) => GadgetModel.findOne({ serial_number }),
 
+  /**
+   * Resolves a gadget from its sticker. Used by scan.service's third
+   * resolution branch and by assertUidFree's gadget check.
+   */
+  findByRfid: (rfid_uid: string) => GadgetModel.findOne({ rfid_uid }).lean(),
+
   updateById: (id: string, data: Partial<IGadget>) =>
     GadgetModel.findByIdAndUpdate(id, data, { new: true }).lean(),
 
@@ -40,7 +46,7 @@ export const gadgetRepo = {
    */
   findActiveByOwner: (owner_person_id: Types.ObjectId) =>
     GadgetModel.find({ owner_person_id, status: 'active' })
-      .select('gadget_type brand_model serial_number')
+      .select('gadget_type brand_model serial_number rfid_uid photo_url')
       .sort({ createdAt: -1 })
       .lean(),
 };

@@ -197,9 +197,19 @@ export const userService = {
         // guard against the write itself, including for a superadmin who
         // reactivated the login on purpose but must not silently un-delete
         // the person's gate status as a side effect.
+        // last_activated_at is stamped here as well as in personService,
+        // because this is a SECOND way a Person reaches 'active': reactivating
+        // a login from the Accounts screen cascades to the person's gate
+        // status. Recording it only on the persons side would leave the status
+        // export showing a stale date — or none at all — for everyone
+        // reactivated through this screen.
+        //
+        // `status: { $ne: 'active' }` narrows it to a real transition, the same
+        // rule personService.update applies, so re-saving an already-active
+        // person does not move the date.
         await PersonModel.updateOne(
-          { _id: target.person_id, deleted_at: null },
-          { $set: { status: person_status! } }
+          { _id: target.person_id, deleted_at: null, status: { $ne: 'active' } },
+          { $set: { status: person_status!, last_activated_at: new Date() } }
         );
       }
     } else {
@@ -339,9 +349,14 @@ export const userService = {
       if (personIds.length) {
         // Narrowed with deleted_at: null for the same reason as setStatus
         // above — never write status: 'active' onto a soft-deleted person.
+        // Narrowed to a real transition with `status: { $ne: 'active' }` so
+        // last_activated_at records an activation and not a re-save — the same
+        // rule setStatus and personService.bulkSetStatus apply. See the note on
+        // the single-record cascade above for why this path has to stamp the
+        // date at all.
         await PersonModel.updateMany(
-          { _id: { $in: personIds }, deleted_at: null },
-          { $set: { status: 'active' } }
+          { _id: { $in: personIds }, deleted_at: null, status: { $ne: 'active' } },
+          { $set: { status: 'active', last_activated_at: new Date() } }
         );
       }
     } else {

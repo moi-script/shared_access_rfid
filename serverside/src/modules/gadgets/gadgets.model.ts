@@ -7,6 +7,20 @@ export interface IGadget extends Document {
   gadget_type: GadgetType;
   brand_model: string;
   serial_number: string;
+  /**
+   * The gadget's own RFID sticker.
+   *
+   * This REVERSES the "Deliberately absent" note this file used to carry. A
+   * gadget is no longer identified only through its owner's card: it taps in
+   * its own right at the Gadget Lane, so that the system records which devices
+   * came in and whether they left. See
+   * docs/superpowers/specs/2026-08-28-gadget-rfid-carry-tracking-design.md.
+   *
+   * Sparse for the same reason Person.rfid_uid is: a gadget registered before
+   * a sticker was assigned holds `null`, and a unique index without `sparse`
+   * would let exactly one such gadget exist.
+   */
+  rfid_uid?: string;
   photo_url?: string;
   status: 'active' | 'inactive';
   createdAt: Date;
@@ -33,18 +47,19 @@ const gadgetSchema = new Schema<IGadget>(
     // constants/gadgetTypes). This index is the anti-theft anchor: it is what
     // makes "the same physical device cannot be registered to two people" true.
     serial_number: { type: String, required: true, unique: true },
+    rfid_uid: { type: String, unique: true, sparse: true },
     photo_url: { type: String },
     status: { type: String, enum: ['active', 'inactive'], default: 'active', index: true },
   },
   { timestamps: true }
 );
 
-// Deliberately absent: `rfid_uid` and `valid_until`.
+// `valid_until` remains deliberately absent. A gadget registration confers no
+// access, so an expiry would deny nothing and grant nothing; `status` is the
+// whole of revocation.
 //
-// A gadget is identified at the gate through its OWNER'S person card, so it
-// never enters the RFID namespace that persons and vehicles share — which is
-// why this module adds no third branch to scan.service.tap and needs no
-// cross-entity UID check. And because a registration confers no access, an
-// expiry would deny nothing and grant nothing; `status` is the whole of
-// revocation. See docs/superpowers/specs/2026-08-05-gadget-registry-design.md.
+// `rfid_uid` USED to be absent for a parallel reason, and is not any more — see
+// the field's own comment above. A gadget now shares the UID namespace with
+// persons and vehicles, which is why every issue point calls assertUidFree()
+// rather than checking two registries by hand.
 export const GadgetModel = model<IGadget>('Gadget', gadgetSchema);

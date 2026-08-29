@@ -16,6 +16,8 @@
     "seed:test:atlas": "node -r dotenv/config dist/config/testSeed.js dotenv_config_path=.env.production",
     "rebuild:occupancy": "ts-node src/config/rebuildOccupancy.ts",
     "migrate:vehicle-types": "ts-node src/config/migrateVehicleTypes.ts",
+    "migrate:activation-dates": "ts-node src/config/migrateActivationDates.ts",
+    "migrate:uid-case": "ts-node src/config/migrateUidCase.ts",
     "grant:superadmin": "ts-node src/config/grantSuperadmin.ts",
     "verify:roles": "ts-node src/config/verifyRoles.ts",
     "verify:gates": "ts-node src/config/verifyGates.ts",
@@ -24,6 +26,8 @@
     "verify:vehicles": "ts-node src/config/verifyVehicles.ts",
     "verify:gadgets": "ts-node src/config/verifyGadgets.ts",
     "verify:registration": "ts-node src/config/verifyRegistration.ts",
+    "verify:person-status": "ts-node src/config/verifyPersonStatus.ts",
+    "verify:gadget-carry": "ts-node src/config/verifyGadgetCarry.ts",
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {

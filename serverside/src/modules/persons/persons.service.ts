@@ -4,16 +4,13 @@ import { personRepo } from './persons.repository';
 import { IPerson, PersonModel } from './persons.model';
 import { ApiError } from '../../utils/ApiError';
 import { getPagination, buildMeta } from '../../utils/pagination';
-import { ROLES, personDomain, type Role } from '../../constants/roles';
+import { ROLES, personDomain, WRITE_DOMAINS, type Role } from '../../constants/roles';
 import { Actor, assertCanWrite, assertCanActOn, assertCanCreateRole } from '../../utils/authority';
 import { userRepo } from '../users/users.repository';
 import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
 import { VehicleModel } from '../vehicles/vehicles.model';
 import { GadgetModel } from '../gadgets/gadgets.model';
-// The REPOSITORY, not vehicles.service — vehicles.service.ts already imports
-// from the persons side (personRepo), so importing the service here would
-// create an import cycle.
-import { vehicleRepo } from '../vehicles/vehicles.repository';
+import { assertUidFree } from '../../utils/assertUidFree';
 
 interface ListQuery {
   page?: string;
@@ -78,12 +75,22 @@ export const personService = {
   async exportCsv(query: ListQuery): Promise<string> {
     const filter = buildListFilter(query);
     const rows = await personRepo.findAll(filter);
+    // status and last_activated_at are appended, not inserted, so an existing
+    // spreadsheet or import that reads these columns positionally keeps
+    // working. `status` was missing entirely until the activation export was
+    // asked for — the CSV described who exists, never whether their card works.
     const header =
-      'full_name,type,id_number,department_section,contact_email,photo_url,rfid_uid';
+      'full_name,type,id_number,department_section,contact_email,photo_url,rfid_uid,' +
+      'status,last_activated_at';
     const esc = (v: unknown) => {
       const s = v == null ? '' : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
+    // Blank, never a placeholder date, when no activation has been recorded —
+    // a fabricated timestamp in this column is indistinguishable from a real
+    // one and would quietly corrupt exactly the question the column answers.
+    // ISO 8601 so a spreadsheet sorts it as a date rather than as text.
+    const isoDate = (d: unknown) => (d ? new Date(d as Date).toISOString() : '');
     const lines = rows.map((r) =>
       [
         r.full_name,
@@ -93,6 +100,8 @@ export const personService = {
         r.contact_email,
         r.photo_url,
         r.rfid_uid,
+        r.status,
+        isoDate(r.last_activated_at),
       ]
         .map(esc)
         .join(',')
@@ -125,20 +134,22 @@ export const personService = {
       if (dup) throw new ApiError('DUPLICATE_ID');
     }
     if (personData.rfid_uid) {
-      const existing = await personRepo.findByRfid(personData.rfid_uid);
-      if (existing) throw new ApiError('DUPLICATE_RFID');
-      // The reverse of the check in vehicleService.create: a UID belongs to a
-      // person OR a vehicle, never both.
-      const vehicleWithRfid = await vehicleRepo.findByRfid(personData.rfid_uid);
-      if (vehicleWithRfid) {
-        throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a vehicle');
-      }
+      await assertUidFree(personData.rfid_uid);
       // A block enforced only at the barrier would be no block at all: a
       // retired UID could be re-registered here and would then resolve
       // normally at the gate. See scan.service.tap for the other half.
       if (await blockedCardRepo.isBlocked(personData.rfid_uid)) throw new ApiError('CARD_BLOCKED');
     } else {
       personData.status = personData.status ?? 'pending';
+    }
+
+    // A person registered WITH a card is created 'active', and that is an
+    // activation — the first one. Without this, every newly registered person
+    // exports with a blank activation date until someone happens to toggle
+    // their status, which would make the column look broken on day one.
+    // Defaults to 'active' here for the same reason personSchema does.
+    if ((personData.status ?? 'active') === 'active') {
+      personData.last_activated_at = new Date();
     }
 
     // Username availability joins the pre-checks above rather than waiting for
@@ -263,7 +274,18 @@ export const personService = {
       }
     }
 
-    const updated = await personRepo.updateById(id, data);
+    // Stamped only on a real transition into 'active'. The `existing.status`
+    // test is what keeps a no-op PATCH — a re-save of an already-active person,
+    // or an edit to their name that happens to carry status through — from
+    // moving a date the status export is read as an audit column. Written into
+    // `data` rather than as a second update so the status and its timestamp
+    // land in one write and cannot disagree.
+    const write: Partial<IPerson> =
+      data.status === 'active' && existing.status !== 'active'
+        ? { ...data, last_activated_at: new Date() }
+        : data;
+
+    const updated = await personRepo.updateById(id, write);
     if (!updated) throw new ApiError('NOT_FOUND', 'Person not found');
     return updated;
   },
@@ -272,16 +294,134 @@ export const personService = {
     return this.update(id, { status }, actor);
   },
 
+  /**
+   * The set a bulk status change would touch: the filter, minus people this
+   * actor may not write, minus the actor's own record.
+   *
+   * Modelled on users.service.resolveBulkTargets and load-bearing for the same
+   * reason: bulkSetStatus writes against the explicit _id list this returns,
+   * never against the client's filter, so a crafted `filter: {}` cannot reach
+   * past the exclusions below. `excluded` is counted here rather than pushed
+   * into the Mongo query because rows a query predicate removes never come
+   * back and cannot be reported to the UI.
+   *
+   * The person-side equivalent of the users version's most dangerous hole is
+   * the domain check: an empty filter matches every person on campus, and
+   * without WRITE_DOMAINS applied per row, one "Deactivate All" from a
+   * registrar would switch off every staff member and employee too. Registrar
+   * holds person:student only, HR holds person:staff and person:employee, so
+   * each sweep stops at its own domain.
+   *
+   * `status` matters because reactivation carries an extra rule that
+   * deactivation does not — see the linked-login exclusion below.
+   */
+  async resolveBulkTargets(
+    query: ListQuery,
+    actor: Actor,
+    status: 'active' | 'inactive'
+  ) {
+    // deleted_at is pinned here, not inherited: buildListFilter never sets it,
+    // and an unfiltered sweep must not resurrect or re-close soft-deleted
+    // people. restore() is the only way back for those, and it deliberately
+    // returns them at 'inactive'.
+    const base: FilterQuery<IPerson> = { ...buildListFilter(query), deleted_at: null };
+    const candidates = await PersonModel.find(base).select('_id type').lean();
+
+    const writable = WRITE_DOMAINS[actor.role] ?? [];
+
+    // The actor's own person record, so an HR admin sweeping "all staff"
+    // cannot deactivate their own card in the process. Derived from the User
+    // row because Actor carries only { id, role } — personId is on the JWT but
+    // not on Actor, and inventing a second source of truth for it here is how
+    // the two drift apart.
+    const self = await userRepo.findById(actor.id);
+    const selfPersonId = self?.person_id ? String(self.person_id) : null;
+
+    // Reactivation only. update() refuses a non-superadmin who tries to
+    // reactivate a person whose linked login was deleted by a superadmin (or
+    // deactivated by someone they cannot act on) — that guard closes the
+    // "reopen a gate an administrator shut" hole, and a bulk path that skipped
+    // it would be a way around the single-record rule rather than a faster
+    // version of it. Deactivation needs no such lookup: closing a gate is
+    // never the unsafe direction.
+    const guardedLoginPersonIds = new Set<string>();
+    if (status === 'active' && actor.role !== ROLES.SUPERADMIN) {
+      const candidateIds = candidates.map((c) => c._id);
+      const logins = await userRepo.findByPersonIds(candidateIds);
+      for (const login of logins) {
+        if (login.deleted_at || !login.is_active) {
+          guardedLoginPersonIds.add(String(login.person_id));
+        }
+      }
+    }
+
+    const targets: string[] = [];
+    let excluded = 0;
+    for (const c of candidates) {
+      const id = String(c._id);
+      if (id === selfPersonId) {
+        excluded++;
+        continue;
+      }
+      if (!writable.includes(personDomain(c.type as 'student' | 'staff' | 'employee'))) {
+        excluded++;
+        continue;
+      }
+      if (guardedLoginPersonIds.has(id)) {
+        excluded++;
+        continue;
+      }
+      targets.push(id);
+    }
+    return { targets, excluded };
+  },
+
+  async bulkPreview(query: ListQuery, actor: Actor, status: 'active' | 'inactive') {
+    const { targets, excluded } = await this.resolveBulkTargets(query, actor, status);
+    return { matched: targets.length, excluded };
+  },
+
+  /**
+   * Writes Person.status and nothing else.
+   *
+   * Deliberately NOT a cascade: vehicles, gadgets, and linked logins are left
+   * alone. Deactivating a person already closes both things that matter —
+   * scan.service.tap refuses their card at the barrier, and
+   * assertOwnerRegistrable refuses any new vehicle or gadget in their name —
+   * so sweeping their existing registrations to 'inactive' would add no
+   * access control while destroying the state a later reactivation has to
+   * restore. users.service.bulkSetStatus cascades because it owns the login
+   * side; this one owns the gate side only.
+   */
+  async bulkSetStatus(status: 'active' | 'inactive', query: ListQuery, actor: Actor) {
+    const { targets, excluded } = await this.resolveBulkTargets(query, actor, status);
+    if (targets.length === 0) return { matched: 0, modified: 0, excluded };
+
+    // Narrowed to rows that actually change, so `modified` reports the real
+    // number of gates opened or closed rather than the size of the sweep.
+    // `matched` stays targets.length so preview and mutation agree — the same
+    // split users.service.bulkSetStatus draws for the same reason.
+    //
+    // deleted_at is re-asserted on the write even though resolveBulkTargets
+    // already filtered on it: the two queries are separated by several awaits,
+    // and a person soft-deleted in between must not come back as 'active'.
+    // `status: { $ne: status }` already restricts this to rows that actually
+    // flip, so stamping the activation date here is free of the no-op hazard
+    // the single-record path in update() has to test for explicitly: a person
+    // already active is not in this write at all.
+    const result = await PersonModel.updateMany(
+      { _id: { $in: targets }, status: { $ne: status }, deleted_at: null },
+      { $set: status === 'active' ? { status, last_activated_at: new Date() } : { status } }
+    );
+
+    return { matched: targets.length, modified: result.modifiedCount, excluded };
+  },
+
   async reassignRfid(id: string, rfid_uid: string, actor: Actor) {
     const existing = await personRepo.findById(id);
     if (!existing) throw new ApiError('NOT_FOUND', 'Person not found');
     if (await blockedCardRepo.isBlocked(rfid_uid)) throw new ApiError('CARD_BLOCKED');
-    const clash = await personRepo.findByRfid(rfid_uid);
-    if (clash && String(clash._id) !== id) throw new ApiError('DUPLICATE_RFID');
-    const vehicleWithRfid = await vehicleRepo.findByRfid(rfid_uid);
-    if (vehicleWithRfid) {
-      throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a vehicle');
-    }
+    await assertUidFree(rfid_uid, { kind: 'person', id });
 
     const updated = await this.update(id, { rfid_uid }, actor);
     // Block AFTER the swap succeeds: blocking first would kill the old card

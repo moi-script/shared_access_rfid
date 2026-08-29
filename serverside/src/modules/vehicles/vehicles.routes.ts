@@ -6,7 +6,8 @@ import { authorize } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
 import { ROLES } from '../../constants/roles';
 import { vehicleController } from './vehicles.controller';
-import { createVehicleSchema, updateVehicleSchema, vehicleStatusSchema } from './vehicles.schema';
+import { createVehicleSchema, updateVehicleSchema,
+  reassignVehicleRfidSchema, vehicleStatusSchema } from './vehicles.schema';
 
 export const vehicleRoutes = Router();
 
@@ -31,5 +32,10 @@ vehicleRoutes.get('/:id', vehicleController.get);
 vehicleRoutes.post('/', validate(createVehicleSchema), vehicleController.create);
 vehicleRoutes.patch('/:id', validate(updateVehicleSchema), vehicleController.update);
 vehicleRoutes.patch('/:id/status', validate(vehicleStatusSchema), vehicleController.setStatus);
+vehicleRoutes.patch(
+  '/:id/rfid',
+  validate(reassignVehicleRfidSchema),
+  vehicleController.reassignRfid
+);
 vehicleRoutes.post('/:id/photo', uploadPhoto, vehicleController.uploadPhoto);
 vehicleRoutes.delete('/:id/photo', vehicleController.deletePhoto);

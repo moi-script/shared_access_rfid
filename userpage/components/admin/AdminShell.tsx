@@ -59,7 +59,7 @@ export default function AdminShell({ user }: { user: AuthUser }) {
             <NcstMark className="h-9 w-9" />
             <div className="leading-tight">
               <p className="font-display text-base font-700 tracking-tight text-navy">
-                NCST RFID
+                NCST Centralized RFID System
               </p>
               <p className="text-[11px] font-500 uppercase tracking-[0.18em] text-ink-soft">
                 {user.role === "superadmin" ? "Administration" : "Registrar"}

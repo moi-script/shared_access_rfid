@@ -1,5 +1,12 @@
 # Gadget Registry — Design
 
+> **Superseded in part, 2026-08-28.** The "no `rfid_uid`, never a scan entity"
+> decision described below was deliberately reversed by
+> `2026-08-28-gadget-rfid-carry-tracking-design.md`: gadgets now carry their own
+> sticker and hold their own occupancy row. The rule this document's decision
+> was protecting — that the gadget registry never refuses passage — is
+> unchanged and still holds.
+
 **Date:** 2026-08-05
 **Status:** Approved, ready for planning
 **Supersedes:** `2026-07-27-gadget-registry-design.md`

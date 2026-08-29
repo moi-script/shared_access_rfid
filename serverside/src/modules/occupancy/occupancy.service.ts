@@ -3,6 +3,7 @@ import { occupancyRepo } from './occupancy.repository';
 import { ScanLogModel } from '../scan/scan.model';
 import { PersonModel } from '../persons/persons.model';
 import { VehicleModel } from '../vehicles/vehicles.model';
+import { GadgetModel } from '../gadgets/gadgets.model';
 import { ApiError } from '../../utils/ApiError';
 import { getPagination, buildMeta } from '../../utils/pagination';
 import { lastResetBoundary } from '../../utils/occupancyWindow';
@@ -62,7 +63,7 @@ export const occupancyService = {
 
 /** The audit row is far more useful with the card's UID than without it. */
 async function resolveRfid(
-  entity_type: 'person' | 'vehicle',
+  entity_type: 'person' | 'vehicle' | 'gadget',
   entity_id: Types.ObjectId
 ): Promise<string> {
   if (entity_type === 'person') {
@@ -77,6 +78,10 @@ async function resolveRfid(
       .lean();
     return person?.rfid_uid ?? 'MANUAL';
   }
-  const vehicle = await VehicleModel.findById(entity_id).select('rfid_uid').lean();
-  return vehicle?.rfid_uid ?? 'MANUAL';
+  if (entity_type === 'vehicle') {
+    const vehicle = await VehicleModel.findById(entity_id).select('rfid_uid').lean();
+    return vehicle?.rfid_uid ?? 'MANUAL';
+  }
+  const gadget = await GadgetModel.findById(entity_id).select('rfid_uid').lean();
+  return gadget?.rfid_uid ?? 'MANUAL';
 }

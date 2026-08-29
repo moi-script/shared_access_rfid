@@ -7,9 +7,16 @@ export const createPersonSchema = z.object({
   department_section: z.string().optional(),
   contact_email: z.string().email().optional(),
   photo_url: z.string().url().optional(),
+  // Uppercased at the boundary so every NEW row stores one spelling of a hex
+  // UID. Casing is the CAV 8832 clash vector: `abcdef` and `ABCDEF` are the
+  // same physical card and used to register as two rows. assertUidFree now
+  // catches that clash regardless of stored casing (it is what protects the
+  // pre-existing mixed-case rows, which are deliberately not migrated); this
+  // stops new ones being created.
   rfid_uid: z
     .string()
     .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
+    .transform((v) => v.toUpperCase())
     .optional(),
   status: z.enum(['active', 'inactive', 'pending']).optional(),
   // Optional here, required by the registration form. Bulk import shares this
@@ -33,9 +40,40 @@ export const updatePersonSchema = createPersonSchema
   .omit({ rfid_uid: true, id_number: true });
 export const statusSchema = z.object({ status: z.enum(['active', 'inactive']) });
 export const reassignRfidSchema = z.object({
-  rfid_uid: z.string().regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters'),
+  // Same normalization as create — see the note there. The reassign path is
+  // the one that must not be forgotten: it is how a replacement card enters
+  // the namespace.
+  rfid_uid: z
+    .string()
+    .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
+    .transform((v) => v.toUpperCase()),
 });
 
 export const importPersonsSchema = z.object({
   rows: z.array(createPersonSchema.omit({ password: true })).min(1).max(500),
+});
+
+// The three keys the directory already filters on, named exactly as
+// buildListFilter names them (`section`, not `department_section` — that is
+// users.schema's spelling and the two endpoints must not diverge). Every key
+// is optional, so `{}` is a legal filter meaning "everyone this actor may
+// write". That breadth is intentional and is fenced server-side in
+// resolveBulkTargets, never here.
+export const bulkFilterSchema = z.object({
+  type: z.enum(['student', 'staff', 'employee']).optional(),
+  section: z.string().optional(),
+  search: z.string().optional(),
+});
+
+// The preview carries the direction alongside the filter because
+// resolveBulkTargets excludes different rows for each — see the comment on
+// personController.bulkPreview. Required, not defaulted: a preview that
+// silently assumed a direction would show a count for the wrong one.
+export const bulkPreviewSchema = bulkFilterSchema.extend({
+  status: z.enum(['active', 'inactive']),
+});
+
+export const bulkStatusSchema = z.object({
+  status: z.enum(['active', 'inactive']),
+  filter: bulkFilterSchema.default({}),
 });

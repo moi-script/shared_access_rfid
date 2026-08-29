@@ -10,6 +10,12 @@ const GATES = [
   { name: 'Side Gate', type: 'person' as const, direction: 'exit' as const, location: 'South Wing Gate B' },
   { name: 'Parking Entrance', type: 'vehicle' as const, direction: 'entry' as const, location: 'Parking Lot Entry' },
   { name: 'Parking Exit', type: 'vehicle' as const, direction: 'exit' as const, location: 'Parking Lot Exit' },
+  // A SECOND person/entry gate, not a new gate kind. The gadget lane at
+  // /gate/person-entry-gadget provisions against this record so its taps are
+  // distinguishable from the ordinary Main Entrance lane in the scan logs —
+  // which is the whole reason that route exists as its own terminal rather
+  // than as a display option on person-entry.
+  { name: 'Gadget Lane', type: 'person' as const, direction: 'entry' as const, location: 'Front Building Gate A — Device Check' },
 ];
 
 async function seed(): Promise<void> {

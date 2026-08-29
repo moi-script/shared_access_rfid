@@ -381,6 +381,53 @@ async function main(): Promise<void> {
       String(react.json.message ?? '').includes('the limit'),
       true
     );
+
+    console.log('\n== replacing a vehicle sticker retires the old one ==');
+
+    // PATCH /vehicles/:id/rfid, the vehicle counterpart of the person and
+    // gadget reassign endpoints. The point of the check is the SECOND half:
+    // plain PATCH /vehicles/:id also swaps rfid_uid, but leaves the old tag in
+    // the pool. This endpoint blocks it, and that is what makes a lost sticker
+    // stay dead.
+    const swapUid = nextUid();
+    const oldUid = listUid;
+    const swap = await request(superadmin, 'PATCH', `/vehicles/${listId}/rfid`, {
+      rfid_uid: swapUid,
+    });
+    expectEqual('vehicle sticker replaced', swap.status, OK);
+    expectEqual(
+      'and the new tag is what the vehicle now holds',
+      (swap.json.data as { rfid_uid?: string })?.rfid_uid,
+      swapUid
+    );
+
+    // The retired tag must be refused everywhere a UID can be issued, not just
+    // at the barrier — the same rule create() enforces via blockedCardRepo.
+    const reuse = await request(superadmin, 'POST', '/vehicles', {
+      owner_person_id: ownerId,
+      plate_number: `VOLD-${suffix}`,
+      vehicle_type: 'pickup',
+      rfid_uid: oldUid,
+    });
+    expectEqual('the retired vehicle tag cannot be re-registered', reuse.status, CONFLICT);
+
+    // The three-way namespace holds on this path too: a gadget's UID must not
+    // become a vehicle's through the reassign endpoint any more than through
+    // create. This is the exact hole that let one sticker sit on a vehicle AND
+    // a laptop at once before assertUidFree existed.
+    const gadgetForClash = await request(superadmin, 'POST', '/gadgets', {
+      owner_person_id: ownerId,
+      gadget_type: 'laptop',
+      brand_model: 'Clash Probe',
+      serial_number: `VCG-${suffix}`,
+      rfid_uid: nextUid(),
+    });
+    expectEqual('probe gadget created', gadgetForClash.status, CREATED);
+    const gadgetUid = (gadgetForClash.json.data as { rfid_uid?: string })?.rfid_uid;
+    const crossClash = await request(superadmin, 'PATCH', `/vehicles/${listId}/rfid`, {
+      rfid_uid: gadgetUid,
+    });
+    expectEqual("a gadget's UID is refused for a vehicle sticker", crossClash.status, CONFLICT);
   } finally {
     // Soft-deletes the person and cascades every owned vehicle to inactive.
     const del = await request(superadmin, 'DELETE', `/persons/${ownerId}`);

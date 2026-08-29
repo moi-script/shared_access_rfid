@@ -38,6 +38,18 @@ export const userRepo = {
    * this lookup exists specifically to FIND a deleted user, not to exclude one.
    */
   findByPersonId: (personId: string) => UserModel.findOne({ person_id: personId }),
+  /**
+   * The batched form of findByPersonId, for personService.resolveBulkTargets:
+   * one query for a whole sweep's candidates rather than one per row. Selects
+   * deleted_at and is_active because the caller's exclusion rule turns on
+   * exactly those two, and is NOT scoped to `deleted_at: null` for the same
+   * reason findByPersonId is not — a deleted login is the thing being looked
+   * for, not a row to skip.
+   */
+  findByPersonIds: (personIds: unknown[]) =>
+    UserModel.find({ person_id: { $in: personIds } })
+      .select('person_id is_active deleted_at')
+      .lean(),
   updateById: (id: string, data: Partial<IUser>) =>
     UserModel.findByIdAndUpdate(id, data, { new: true }).select(SAFE_FIELDS).lean(),
 

@@ -38,7 +38,24 @@ interface TapResult {
     registered?: { vehicle_type: string; make?: string }[];
     /** The cardholder's registered devices, for the exit ownership check. Shown
      *  to the guard; never consulted by any access decision. */
-    gadgets?: { gadget_type: string; brand_model: string; serial_number: string }[];
+    gadgets?: {
+      id: string;
+      gadget_type: string;
+      brand_model: string;
+      serial_number: string;
+      photo_url?: string;
+    }[];
+    /** The subset of those devices whose occupancy row is still `inside` — what
+     *  the exit terminal must see tapped out. Populated ONLY on a granted
+     *  person EXIT tap: on entry there is nothing to return yet, and on a
+     *  denial this is withheld for the same reason `gadgets` is. */
+    gadgets_inside?: {
+      id: string;
+      gadget_type: string;
+      brand_model: string;
+      serial_number: string;
+    }[];
+    person_id?: string;
   };
 }
 
@@ -63,7 +80,7 @@ export const scanService = {
 
     const scan_time = new Date();
 
-    let entity_type: 'person' | 'vehicle' = 'person';
+    let entity_type: 'person' | 'vehicle' | 'gadget' = 'person';
     let entity_id: Types.ObjectId | null = null;
     let access_result: 'granted' | 'denied' = 'denied';
     let reason: string | null = 'unregistered_uid';
@@ -106,6 +123,10 @@ export const scanService = {
           type: person.type,
           department_section: person.department_section ?? null,
           photo_url: person.photo_url,
+          // The terminal opens its device prompt against this id. Set on the
+          // shared person view rather than in one branch, so a person tap
+          // carries it at every gate type.
+          person_id: String(person._id),
         };
 
         if (gate.type === 'vehicle') {
@@ -219,16 +240,70 @@ export const scanService = {
             vehicle: { vehicle_type: vehicle.vehicle_type, make: vehicle.make },
             vehicle_photo_url: vehicle.photo_url,
           };
+        } else {
+          // Third and LAST resolution branch. Order is load-bearing: persons
+          // and vehicles are the access-bearing entities and must never be
+          // shadowed by a gadget lookup.
+          //
+          // This is the case scan.service used to say would never exist. A
+          // gadget now taps in its own right so the system can record which
+          // devices came in and whether they left — but it still decides
+          // nothing about a human's passage. A gadget tap moves ONLY its own
+          // occupancy row: the barrier is already open or shut on the strength
+          // of the person's own card, tapped moments earlier.
+          const gadget = await gadgetRepo.findByRfid(input.rfid_uid);
+          if (gadget) {
+            entity_type = 'gadget';
+            entity_id = gadget._id;
+            if (gadget.status === 'active') {
+              access_result = 'granted';
+              reason = null;
+            } else {
+              access_result = 'denied';
+              reason = 'inactive_id';
+              // lapsedAtOwnGate stays false: the egress override exists to
+              // stop a person being trapped inside, and a laptop cannot be
+              // trapped. A deactivated device simply does not tap out, and
+              // its row is cleared by the nightly boundary.
+            }
+            const owner = await personRepo.findById(String(gadget.owner_person_id));
+            personView = {
+              full_name: owner?.full_name ?? 'Unknown owner',
+              type: 'gadget',
+              owner_type: owner?.type,
+              department_section: owner?.department_section ?? null,
+              gadgets: [
+                {
+                  id: String(gadget._id),
+                  gadget_type: gadget.gadget_type,
+                  brand_model: gadget.brand_model,
+                  serial_number: gadget.serial_number,
+                  photo_url: gadget.photo_url,
+                },
+              ],
+            };
+          }
         }
       }
     }
 
-    // A gate has a fixed type now, so a person card must not open the parking
+    // A gate has a fixed type, so a person card must not open the parking
     // barrier and a vehicle tag must not register attendance at a walking gate.
-    // Gadgets are not a third case here and never will be: they are identified
-    // through their owner's card and never become an entity_type, so this check
-    // still applies only to person and vehicle. See the gadget block below.
-    if (access_result === 'granted' && entity_type !== gate.type) {
+    //
+    // Gadgets needed a carve-out here rather than a widening, because a gate's
+    // type is only ever 'person' or 'vehicle': there is no gadget gate and
+    // there should not be one, so 'gadget' matches neither by construction and
+    // every device tap would otherwise be denied wrong_gate_type.
+    //
+    // The carve-out is narrow on purpose. Gadgets are exempt at PERSON gates
+    // ONLY, not universally. A device accompanies whoever carries it through a
+    // walking gate, which is why it cannot be held to a gate type of its own —
+    // but a laptop tag at the parking barrier is a genuine wrong-gate tap, and
+    // showing the guard GRANTED for it is the opposite of useful. Gadget Lane
+    // is seeded type: 'person' (seed.ts:18); no vehicle gate ever expects a
+    // device.
+    const gadgetAtPersonGate = entity_type === 'gadget' && gate.type === 'person';
+    if (access_result === 'granted' && !gadgetAtPersonGate && entity_type !== gate.type) {
       access_result = 'denied';
       reason = 'wrong_gate_type';
       personView = undefined;
@@ -369,13 +444,15 @@ export const scanService = {
     // involve a card in the wrong hands — the reason this data is withheld on
     // denials at all. Testing `access_result` alone would hand exactly that
     // person the cardholder's vehicle and laptop-serial list.
-    if (
-      access_result === 'granted' &&
-      !lapsedEgress &&
-      entity_type === 'person' &&
-      entity_id &&
-      personView
-    ) {
+    //
+    // Hoisted into a named condition because the rule now has two arms: the
+    // person arm below, which withholds by never ATTACHING the lists, and the
+    // gadget arm just after it, which has to REMOVE one. Both must always
+    // agree on what "withheld" means, and two copies of the predicate would
+    // eventually stop agreeing.
+    const identityWithheld = access_result !== 'granted' || lapsedEgress;
+
+    if (!identityWithheld && entity_type === 'person' && entity_id && personView) {
       const owned = await vehicleRepo.findActiveByOwner(entity_id, scan_time);
       personView.registered = owned.map((v) => ({ vehicle_type: v.vehicle_type, make: v.make }));
       // Registered devices, for the exit ownership check: the guard compares
@@ -400,15 +477,72 @@ export const scanService = {
       //   3. Vehicle gates are unaffected. The single-card owner path sets
       //      entity_type = 'vehicle' before this point, so the condition does
       //      not hold there. The parking barrier does not prompt for a laptop.
-      //   4. A gadget never becomes an entity_type, so the wrong_gate_type
-      //      guard, anti-passback, ScanLog and AttendanceSummary are all
-      //      untouched. This adds no reason codes.
+      //   4. It stays a DISPLAY field even though a gadget is now a full
+      //      entity_type in its own right. That widening is what this list
+      //      item used to deny, and each consequence of it is handled
+      //      elsewhere, on purpose, rather than here: the wrong_gate_type
+      //      guard needed the `gadgetAtPersonGate` carve-out (there is no
+      //      gadget gate type, so a device would otherwise be refused at every
+      //      barrier); a gadget tap moves its OWN occupancy row and is
+      //      therefore subject to anti-passback like anything else that has
+      //      one; and it writes its own ScanLog rows, which is the entire
+      //      point of the feature. What remains true is attendance: a gadget
+      //      tap writes none, because `attendancePersonId` is null for it —
+      //      attendance is keyed by person and a device is not a person. This
+      //      block still adds no reason codes of its own.
       const devices = await gadgetRepo.findActiveByOwner(entity_id);
       personView.gadgets = devices.map((g) => ({
+        id: String(g._id),
         gadget_type: g.gadget_type,
         brand_model: g.brand_model,
         serial_number: g.serial_number,
+        photo_url: g.photo_url,
       }));
+
+      // On EXIT only, narrow that list to the devices whose occupancy row is
+      // still `inside` — the ones the terminal must see tapped out. Entry
+      // returns nothing here: the devices have not been tapped in yet, so an
+      // "expected" list at entry would be a list of things nobody promised.
+      //
+      // Reuses the same `boundary` rule occupancy itself applies, so a device
+      // stranded inside from before the nightly reset is not demanded back
+      // today. Without that, one forgotten tap-out would haunt every
+      // subsequent exit for that person until an admin cleared the row.
+      if (input.direction === 'exit' && devices.length > 0) {
+        const insideRows = await occupancyRepo.listInsideGadgetIds(
+          devices.map((g) => g._id),
+          lastResetBoundary(scan_time)
+        );
+        const insideSet = new Set(insideRows.map(String));
+        personView.gadgets_inside = devices
+          .filter((g) => insideSet.has(String(g._id)))
+          .map((g) => ({
+            id: String(g._id),
+            gadget_type: g.gadget_type,
+            brand_model: g.brand_model,
+            serial_number: g.serial_number,
+          }));
+      }
+    }
+
+    // The same rule, second arm — see identityWithheld above.
+    //
+    // A gadget tap is the one path that reaches here with `gadgets` ALREADY
+    // populated: the third resolution branch builds personView from the device
+    // and its owner before the grant/deny decision exists, so withholding here
+    // means removing the list rather than declining to add it. Without this, a
+    // retired or deactivated sticker tapped at the Gadget Lane answers its own
+    // inactive_id denial with the owner's full name, department AND the device
+    // serial — precisely the "someone holding a credential that is not theirs"
+    // case the rule above exists for, arriving through the one branch that
+    // never passed through it.
+    //
+    // personView itself SURVIVES, matching the vehicle branch's posture: a
+    // guard resolving a denial still needs the minimum to act on it, and the
+    // owner's name on a denied device tag is what tells them whose desk to
+    // walk the laptop back to. Only the device list goes.
+    if (identityWithheld && entity_type === 'gadget' && personView) {
+      delete personView.gadgets;
     }
 
     await scanRepo.createLog({
@@ -455,6 +589,54 @@ export const scanService = {
     return { access_result, reason, scan_time, person: personView };
   },
 
+  /**
+   * Records that a person left with devices still inside.
+   *
+   * Writes a SECOND scan-log row rather than amending the exit row, which was
+   * already written when they tapped. Two rows for one exit is correct here:
+   * the first records that the person left, the second records what they left
+   * without. occupancyService.clear writes its own append-only row for the
+   * same reason — the state it describes is overwritten by the next tap.
+   *
+   * Deliberately touches NO occupancy state. The devices genuinely are still
+   * inside; their rows must stay `inside` so tomorrow's roster shows them and
+   * the nightly boundary is what eventually clears them.
+   *
+   * access_result is 'granted', not 'denied'. Nothing was refused — the person
+   * is already outside. A denial here would be the first path in the system
+   * from a laptop to a refused tap, which scan.service.ts:466 forbids.
+   */
+  async closeGadgetSession(input: {
+    gate_id: string;
+    person_id: string;
+    missing_gadget_ids: string[];
+  }): Promise<{ logged: boolean; missing: number }> {
+    const gate = await gateRepo.findById(input.gate_id);
+    if (!gate) throw new ApiError('NOT_FOUND', 'Gate not found');
+    if (!Types.ObjectId.isValid(input.person_id)) {
+      throw new ApiError('VALIDATION_ERROR', 'person_id is not a valid id');
+    }
+    const person = await personRepo.findById(input.person_id);
+    if (!person) throw new ApiError('NOT_FOUND', 'Person not found');
+
+    await scanRepo.createLog({
+      // The person's own card UID, so the row sits alongside their exit in any
+      // per-card view. Falls back to the empty string only for a cardless
+      // person, who cannot have tapped an exit in the first place.
+      rfid_uid: person.rfid_uid ?? '',
+      entity_type: 'person',
+      entity_id: person._id,
+      gate_id: gate._id,
+      direction: 'exit',
+      access_result: 'granted',
+      reason: 'gadget_not_returned',
+      scan_time: new Date(),
+    });
+
+    liveHub.notifyScan();
+    return { logged: true, missing: input.missing_gadget_ids.length };
+  },
+
   async listLogs(query: Record<string, string | undefined>) {
     const { getPagination, buildMeta } = await import('../../utils/pagination');
     const p = getPagination(query);
@@ -491,6 +673,10 @@ export const scanService = {
       { $limit: p.limit },
       { $lookup: { from: 'people', localField: 'entity_id', foreignField: '_id', as: 'person' } },
       { $lookup: { from: 'vehicles', localField: 'entity_id', foreignField: '_id', as: 'vehicle' } },
+      // The third entity_type. Without it every device tap — and the Gadget
+      // Lane roughly doubles tap volume — renders `subject: null` in the
+      // Records console, indistinguishable from an unregistered card.
+      { $lookup: { from: 'gadgets', localField: 'entity_id', foreignField: '_id', as: 'gadget' } },
       { $lookup: { from: 'gates', localField: 'gate_id', foreignField: '_id', as: 'gateDoc' } },
       {
         // Projection is a whitelist and the joined arrays are never projected
@@ -526,9 +712,26 @@ export const scanService = {
                 $cond: [
                   { $gt: [{ $size: '$vehicle' }, 0] },
                   { plate_number: { $first: '$vehicle.plate_number' } },
-                  // null when the UID matched nothing — an unregistered card
-                  // has no entity to resolve.
-                  null,
+                  {
+                    $cond: [
+                      { $gt: [{ $size: '$gadget' }, 0] },
+                      // A gadget has neither a name nor a plate: brand/model
+                      // goes where the name goes and the SERIAL where the
+                      // id/plate goes, matching what
+                      // occupancy.repository.listInside already projects for
+                      // the roster. Ordered LAST, after person and vehicle,
+                      // for the same reason tap resolution is: the
+                      // access-bearing entities must never be shadowed by a
+                      // gadget.
+                      {
+                        full_name: { $first: '$gadget.brand_model' },
+                        id_number: { $first: '$gadget.serial_number' },
+                      },
+                      // null when the UID matched nothing — an unregistered
+                      // card has no entity to resolve.
+                      null,
+                    ],
+                  },
                 ],
               },
             ],

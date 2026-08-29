@@ -73,6 +73,10 @@ async function recentScans(limit: number) {
     { $limit: limit },
     { $lookup: { from: 'gates', localField: 'gate_id', foreignField: '_id', as: 'gate' } },
     { $lookup: { from: 'people', localField: 'entity_id', foreignField: '_id', as: 'person' } },
+    // Gadgets are the third entity_type. The Gadget Lane roughly doubles tap
+    // volume, so without this join the 8-row live feed fills with nameless
+    // rows and stops being a feed of anything.
+    { $lookup: { from: 'gadgets', localField: 'entity_id', foreignField: '_id', as: 'gadget' } },
     {
       $project: {
         _id: 0,
@@ -83,7 +87,15 @@ async function recentScans(limit: number) {
         reason: 1,
         rfid_uid: 1,
         gate: { $ifNull: [{ $arrayElemAt: ['$gate.name', 0] }, 'Unknown gate'] },
-        name: { $arrayElemAt: ['$person.full_name', 0] },
+        // A gadget has no name, so its BRAND/MODEL takes the slot — the
+        // convention occupancy.repository.listInside established for the
+        // roster, so one device reads the same on every screen.
+        name: {
+          $ifNull: [
+            { $arrayElemAt: ['$person.full_name', 0] },
+            { $arrayElemAt: ['$gadget.brand_model', 0] },
+          ],
+        },
       },
     },
   ]);
@@ -217,6 +229,7 @@ export const dashboardService = {
       // card never renders a dash that the poll then replaces a beat later.
       persons_inside: inside.persons,
       vehicles_inside: inside.vehicles,
+      gadgets_inside: inside.gadgets,
       active_today,
       total_vehicles,
       total_gadgets,
@@ -253,6 +266,7 @@ export const dashboardService = {
     return {
       persons_inside: inside.persons,
       vehicles_inside: inside.vehicles,
+      gadgets_inside: inside.gadgets,
       scan_events_today,
       granted_today,
       denied_today,
@@ -327,6 +341,9 @@ export const dashboardService = {
       attendance_summary,
       recent_attendance: recent,
       vehicles: vehicles.map((vehicle) => ({
+        // The row's own id, so the profile can act on it — replacing a tag
+        // needs a target, and plate/serial are labels, not handles.
+        id: String(vehicle._id),
         plate_number: vehicle.plate_number,
         vehicle_type: vehicle.vehicle_type,
         vehicle_model: vehicle.vehicle_model ?? null,
@@ -334,9 +351,15 @@ export const dashboardService = {
         status: vehicle.status,
       })),
       gadgets: gadgets.map((gadget) => ({
+        id: String(gadget._id),
         gadget_type: gadget.gadget_type,
         brand_model: gadget.brand_model,
         serial_number: gadget.serial_number,
+        // Nullable where the vehicle's above is not: a gadget can be registered
+        // before its sticker arrives (gadgets.schema.ts makes rfid_uid
+        // optional), so the profile has to distinguish "no tag yet" from a tag
+        // it simply failed to send.
+        rfid_uid: gadget.rfid_uid ?? null,
         status: gadget.status,
       })),
       recent_scans: scans,

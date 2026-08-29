@@ -5,6 +5,9 @@ import { ApiError } from '../../utils/ApiError';
 import { getPagination, buildMeta } from '../../utils/pagination';
 import { Actor, assertCanWrite } from '../../utils/authority';
 import { personRepo } from '../persons/persons.repository';
+import { assertOwnerRegistrable } from '../persons/personStatus';
+import { assertUidFree } from '../../utils/assertUidFree';
+import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
 import {
   GADGET_LIMITS,
   GadgetType,
@@ -103,6 +106,18 @@ export const gadgetService = {
     // the guard would be shown a serial with no name attached to it.
     const owner = await personRepo.findById(String(data.owner_person_id));
     if (!owner) throw new ApiError('NOT_FOUND', 'Gadget owner not found');
+    // Same reasoning as vehicleService.create: existing-and-not-deleted was
+    // never the whole question. Refused before takeSerial so a rejected
+    // registration does not burn a serial number on its way out.
+    assertOwnerRegistrable(owner, 'gadget');
+
+    // A gadget now shares the UID namespace with persons and vehicles, so this
+    // is a three-way check, not a new one-way check. Runs before takeSerial so
+    // a rejected registration does not burn a serial number.
+    if (data.rfid_uid) {
+      await assertUidFree(data.rfid_uid);
+      if (await blockedCardRepo.isBlocked(data.rfid_uid)) throw new ApiError('CARD_BLOCKED');
+    }
 
     const serial_number = await takeSerial(String(data.serial_number));
 
@@ -130,6 +145,11 @@ export const gadgetService = {
 
     const current = await gadgetRepo.findById(id);
     if (!current) throw new ApiError('NOT_FOUND', 'Gadget not found');
+
+    if (data.rfid_uid && data.rfid_uid !== current.rfid_uid) {
+      await assertUidFree(data.rfid_uid, { kind: 'gadget', id });
+      if (await blockedCardRepo.isBlocked(data.rfid_uid)) throw new ApiError('CARD_BLOCKED');
+    }
 
     const patch: Partial<IGadget> = { ...data };
     if (data.serial_number !== undefined) {
@@ -165,6 +185,10 @@ export const gadgetService = {
       if (!owner) {
         throw new ApiError('NOT_FOUND', 'Gadget owner not found or deleted; cannot activate');
       }
+      // Inside the willBeActive branch, so DEACTIVATING a gadget still works
+      // for an inactive owner — otherwise a deactivated person's gadgets
+      // could never be switched off. Mirrors vehicles.service.
+      assertOwnerRegistrable(owner, 'gadget');
       const active = await gadgetRepo.findActiveByOwner(owner._id);
       // current._id is excluded so an already-active row does not count against
       // its own limit on a PATCH that merely re-sends its fields.
@@ -180,5 +204,45 @@ export const gadgetService = {
   async setStatus(id: string, status: 'active' | 'inactive', actor: Actor) {
     assertCanWrite(actor, 'gadget');
     return this.update(id, { status }, actor);
+  },
+
+  /**
+   * Replaces a gadget's sticker and retires the old one.
+   *
+   * Mirrors personService.reassignRfid, including its deliberate fail-open: the
+   * swap is written FIRST and the old tag blocked second. Blocking first would
+   * kill the old sticker even if the swap then failed, leaving the device with
+   * no working tag at all. If the block throws afterwards the old UID is off
+   * this gadget AND off the blocklist — back in the pool and re-registrable —
+   * so it is logged at error level rather than swallowed.
+   */
+  async reassignRfid(id: string, rfid_uid: string, actor: Actor) {
+    assertCanWrite(actor, 'gadget');
+    const existing = await gadgetRepo.findById(id);
+    if (!existing) throw new ApiError('NOT_FOUND', 'Gadget not found');
+    if (await blockedCardRepo.isBlocked(rfid_uid)) throw new ApiError('CARD_BLOCKED');
+    await assertUidFree(rfid_uid, { kind: 'gadget', id });
+
+    const updated = await gadgetRepo.updateById(id, { rfid_uid });
+    if (!updated) throw new ApiError('NOT_FOUND', 'Gadget not found');
+
+    if (existing.rfid_uid && existing.rfid_uid !== rfid_uid) {
+      try {
+        await blockedCardRepo.block({
+          rfid_uid: existing.rfid_uid,
+          source: 'card_replaced',
+          previous_person_id: existing.owner_person_id,
+          blocked_by: actor.id,
+        });
+      } catch (err) {
+        console.error(
+          `[gadgets] FAILED to block retired tag ${existing.rfid_uid} after reassignRfid ` +
+            `for gadget ${id} — this UID is now unassigned AND unblocked, and is ` +
+            're-registrable until manually blocked.',
+          err
+        );
+      }
+    }
+    return updated;
   },
 };

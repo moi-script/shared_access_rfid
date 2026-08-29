@@ -7,6 +7,8 @@ import { Actor, assertCanWrite } from '../../utils/authority';
 import { nextSchoolYearEnd } from '../../utils/schoolYear';
 import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
 import { personRepo } from '../persons/persons.repository';
+import { assertOwnerRegistrable } from '../persons/personStatus';
+import { assertUidFree } from '../../utils/assertUidFree';
 import { VEHICLE_LIMITS, VehicleType, pluralizeType } from '../../constants/vehicleTypes';
 import { escapeRegex } from '../../utils/escapeRegex';
 
@@ -90,18 +92,13 @@ export const vehicleService = {
     // alone and then find no owner to show on the terminal.
     const owner = await personRepo.findById(String(data.owner_person_id));
     if (!owner) throw new ApiError('NOT_FOUND', 'Vehicle owner not found');
-    const existingRfid = await vehicleRepo.findByRfid(String(data.rfid_uid));
-    if (existingRfid) throw new ApiError('DUPLICATE_RFID');
-    // A UID belongs to a person OR a vehicle, never both. scan.service.tap
-    // resolves person first, so a vehicle holding a person's UID is
-    // permanently unscannable — it would be accepted here and then silently
-    // never work at the barrier. This is how CAV 8832 was created.
-    if (data.rfid_uid) {
-      const personWithRfid = await personRepo.findByRfid(String(data.rfid_uid));
-      if (personWithRfid) {
-        throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a person');
-      }
-    }
+    // Existing-and-not-deleted was never the whole question. A deactivated
+    // owner is refused at the barrier by scan.service.tap but was still
+    // accepted here, so deactivation left the registration desk open. Runs
+    // before the RFID and allowance checks so the clerk is told the real
+    // reason ("this person is inactive") rather than a downstream symptom.
+    assertOwnerRegistrable(owner, 'vehicle');
+    await assertUidFree(String(data.rfid_uid));
     // A block enforced only at the barrier would be no block at all: a
     // retired UID could be re-registered here and would then resolve
     // normally at the gate. See scan.service.tap for the other half.
@@ -134,14 +131,7 @@ export const vehicleService = {
       const currentForRfid = await vehicleRepo.findById(id);
       if (!currentForRfid) throw new ApiError('NOT_FOUND', 'Vehicle not found');
       if (data.rfid_uid !== currentForRfid.rfid_uid) {
-        const existingRfid = await vehicleRepo.findByRfid(data.rfid_uid);
-        if (existingRfid && String(existingRfid._id) !== String(currentForRfid._id)) {
-          throw new ApiError('DUPLICATE_RFID');
-        }
-        const personWithRfid = await personRepo.findByRfid(data.rfid_uid);
-        if (personWithRfid) {
-          throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a person');
-        }
+        await assertUidFree(data.rfid_uid, { kind: 'vehicle', id });
         if (await blockedCardRepo.isBlocked(data.rfid_uid)) throw new ApiError('CARD_BLOCKED');
       }
     }
@@ -206,6 +196,12 @@ export const vehicleService = {
       const effectiveValidUntil = data.valid_until ?? current.valid_until;
       const willBeActive = willBeStatusActive && new Date(effectiveValidUntil) >= new Date();
       if (willBeActive) {
+        // Gated on willBeActive, not on the outer branch: a PATCH that
+        // DEACTIVATES or backdates a vehicle must keep working for an
+        // inactive owner. Refusing those would mean a deactivated person's
+        // vehicles could never be switched off — the guard would protect the
+        // exact state it exists to reach.
+        assertOwnerRegistrable(owner, 'vehicle');
         const active = await vehicleRepo.findActiveByOwner(owner._id, new Date());
         const effectiveType = (data.vehicle_type ?? current.vehicle_type) as VehicleType;
         // current._id is excluded: an already-active vehicle must not count
@@ -220,5 +216,54 @@ export const vehicleService = {
   async setStatus(id: string, status: 'active' | 'inactive', actor: Actor) {
     assertCanWrite(actor, 'vehicle');
     return this.update(id, { status }, actor);
+  },
+
+  /**
+   * Replaces a vehicle's sticker and retires the old one.
+   *
+   * A dedicated endpoint rather than "just PATCH rfid_uid", which `update`
+   * already accepts and validates. The difference is the second half: `update`
+   * swaps the tag and leaves the OLD one in the pool, free to be registered
+   * again by anyone. personService.reassignRfid and gadgetService.reassignRfid
+   * both block it instead, on the reasoning that a physically retired sticker
+   * is usually retired because it was lost — and a lost tag that stays
+   * re-registrable is a spare key to the barrier. A vehicle's tag was the one
+   * of the three with no such path, so replacing one silently behaved
+   * differently from replacing the other two.
+   *
+   * Same deliberate fail-open as the other two: the swap is written FIRST and
+   * the old tag blocked second, so a failed block cannot leave the vehicle with
+   * no working tag at all. If the block throws afterwards the old UID is off
+   * this vehicle AND off the blocklist — back in the pool — so it is logged at
+   * error level rather than swallowed.
+   */
+  async reassignRfid(id: string, rfid_uid: string, actor: Actor) {
+    assertCanWrite(actor, 'vehicle');
+    const existing = await vehicleRepo.findById(id);
+    if (!existing) throw new ApiError('NOT_FOUND', 'Vehicle not found');
+    if (await blockedCardRepo.isBlocked(rfid_uid)) throw new ApiError('CARD_BLOCKED');
+    await assertUidFree(rfid_uid, { kind: 'vehicle', id });
+
+    const updated = await vehicleRepo.updateById(id, { rfid_uid });
+    if (!updated) throw new ApiError('NOT_FOUND', 'Vehicle not found');
+
+    if (existing.rfid_uid && existing.rfid_uid !== rfid_uid) {
+      try {
+        await blockedCardRepo.block({
+          rfid_uid: existing.rfid_uid,
+          source: 'card_replaced',
+          previous_person_id: existing.owner_person_id,
+          blocked_by: actor.id,
+        });
+      } catch (err) {
+        console.error(
+          `[vehicles] FAILED to block retired tag ${existing.rfid_uid} after reassignRfid ` +
+            `for vehicle ${id} — this UID is now unassigned AND unblocked, and is ` +
+            're-registrable until manually blocked.',
+          err
+        );
+      }
+    }
+    return updated;
   },
 };

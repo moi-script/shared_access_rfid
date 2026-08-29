@@ -22,6 +22,9 @@ export const gadgetController = {
   setStatus: asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(res, await gadgetService.setStatus(req.params.id, req.body.status, actorOf(req)));
   }),
+  reassignRfid: asyncHandler(async (req: Request, res: Response) => {
+    sendSuccess(res, await gadgetService.reassignRfid(req.params.id, req.body.rfid_uid, actorOf(req)));
+  }),
 
   uploadPhoto: asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(res, await gadgetPhotoService.upload(req.params.id, actorOf(req), req.file), 201);

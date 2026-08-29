@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import AuthedImage, { PersonAvatar } from "@/components/AuthedImage";
+import NcstMark from "@/components/NcstMark";
 import GateCardSkeleton from "./GateCardSkeleton";
 import GateIdleScene from "./GateIdleScene";
 import GateProvisioning from "./GateProvisioning";
@@ -16,6 +17,7 @@ import {
   type TapOutcome,
 } from "@/lib/gateTerminal";
 import { reasonText } from "@/lib/reasonText";
+import { API_BASE } from "@/lib/auth";
 
 const RESET_MS = 750;
 const UID_RE = /^[0-9A-Fa-f]{6,32}$/;
@@ -70,6 +72,150 @@ function VehicleImage({ path, gateKey }: { path?: string; gateKey: string }) {
   );
 }
 
+/** A registered device's photo. Same neutral glyph fallback as VehicleImage —
+ *  most gadgets have no photo, so the placeholder is the common case. */
+function GadgetImage({ path, gateKey }: { path?: string; gateKey: string }) {
+  const placeholder = <span className="font-display text-4xl font-700 opacity-60">—</span>;
+  if (!path) return placeholder;
+  return (
+    <AuthedImage
+      path={path}
+      alt="Registered device"
+      className="h-full w-full object-cover"
+      headers={{ "X-Gate-Key": gateKey }}
+      fallback={placeholder}
+    />
+  );
+}
+
+type DeviceRow = {
+  id: string;
+  gadget_type: string;
+  brand_model: string;
+  serial_number: string;
+  photo_url?: string;
+};
+
+/**
+ * The two-step prompt.
+ *
+ * Presentation only — there is no server session. Each gadget tap is an
+ * ordinary POST /scan/tap that has already moved that device's occupancy row
+ * by the time it appears here. So a terminal reload mid-prompt loses the
+ * checklist but never loses the record: everything tapped so far stands.
+ */
+type DevicePrompt = {
+  mode: "entry" | "exit";
+  personId: string;
+  expected: DeviceRow[];
+  seen: DeviceRow[];
+};
+
+/** The gadget-lane device checklist. Rendered both inside the granted result
+ *  card (immediately after the person's own tap) and, once that card's
+ *  `outcome` auto-resets after RESET_MS, as its own standalone panel — the
+ *  prompt persists on `devicePrompt` state, not on `outcome`, since a guard
+ *  needs far longer than RESET_MS to walk someone's devices past the reader. */
+function DevicePromptPanel({
+  prompt,
+  gateKey,
+  onDone,
+}: {
+  prompt: DevicePrompt;
+  gateKey: string;
+  onDone: () => void;
+}) {
+  if (prompt.mode === "exit") {
+    // The exit lane already knows which devices this person is carrying —
+    // gadgets_inside — so this checklist is expected-vs-seen rather than the
+    // entry lane's open-ended "whatever gets tapped" list.
+    return (
+      <div className="w-full text-center">
+        <p className="font-mono text-xs uppercase tracking-[0.42em] text-gold/70">
+          Devices to return
+        </p>
+        <h1 className="mt-5 font-display text-5xl font-700 uppercase leading-[0.9] tracking-tight">
+          Tap each device
+        </h1>
+        <div className="mx-auto mt-6 max-w-xl space-y-3 text-left">
+          {prompt.expected.map((g) => {
+            const ticked = prompt.seen.some((s) => s.id === g.id);
+            return (
+              <div
+                key={g.id}
+                className={`flex items-center gap-4 rounded-2xl px-5 py-3 ${
+                  ticked ? "bg-current/15" : "bg-current/5"
+                }`}
+              >
+                <div
+                  className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-lg font-700 ${
+                    ticked ? "bg-current/25" : "bg-current/10 opacity-40"
+                  }`}
+                  aria-hidden
+                >
+                  {ticked ? "✓" : ""}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-lg font-600 uppercase tracking-[0.14em] opacity-70">
+                    <span className="capitalize">{g.gadget_type}</span> · {g.brand_model}
+                  </p>
+                  <p className="font-mono text-3xl font-700 leading-tight">{g.serial_number}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={onDone}
+          className="mt-8 rounded-full bg-current/15 px-8 py-3 text-lg font-700 uppercase tracking-[0.18em]"
+        >
+          Done
+        </button>
+      </div>
+    );
+  }
+
+  if (prompt.mode !== "entry") return null;
+  return (
+    <div className="w-full text-center">
+      <p className="font-mono text-xs uppercase tracking-[0.42em] text-gold/70">Gadget Lane</p>
+      <h1 className="mt-5 font-display text-5xl font-700 uppercase leading-[0.9] tracking-tight">
+        Tap devices
+      </h1>
+      {prompt.seen.length === 0 ? (
+        <p className="mt-4 text-lg text-white/55">Tap each device now, or press Done</p>
+      ) : (
+        <div className="mx-auto mt-6 max-w-xl space-y-3 text-left">
+          {prompt.seen.map((g) => (
+            <div
+              key={g.id}
+              className="flex items-center gap-4 rounded-2xl bg-current/15 px-5 py-3"
+            >
+              <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-xl bg-current/15">
+                <GadgetImage path={g.photo_url} gateKey={gateKey} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-lg font-600 uppercase tracking-[0.14em] opacity-70">
+                  <span className="capitalize">{g.gadget_type}</span> · {g.brand_model}
+                </p>
+                <p className="font-mono text-3xl font-700 leading-tight">{g.serial_number}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={onDone}
+        className="mt-8 rounded-full bg-current/15 px-8 py-3 text-lg font-700 uppercase tracking-[0.18em]"
+      >
+        Done
+      </button>
+    </div>
+  );
+}
+
 /**
  * One row of the recent-taps panel.
  *
@@ -109,9 +255,21 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
   // card the reader never picked up.
   const [pending, setPending] = useState(false);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
+  const [devicePrompt, setDevicePrompt] = useState<DevicePrompt | null>(null);
+  // Set only when an exit checklist closes with devices still unticked. Gold,
+  // not red: the exit is never refused, this just tells the guard what to log.
+  // Cleared on the very next tap so it never lingers over an unrelated scan.
+  const [deviceWarning, setDeviceWarning] = useState<DeviceRow[] | null>(null);
 
   const busyRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards against a second dispatch reaching the same closure before React
+  // commits the setDevicePrompt(null) below. A kiosk touchscreen can fire an
+  // emulated and a native click for one press, and both would otherwise see the
+  // same non-null prompt, compute the same `missing`, and file the audit row
+  // twice — two gadget_not_returned rows for one exit, which is exactly the
+  // double-count the row exists to make countable. Mirrors busyRef's shape.
+  const closingRef = useRef(false);
   // Buffer for the global keydown listener below: the characters typed so
   // far in the current burst, and the timestamp of the last keystroke so the
   // next one can be checked against MAX_KEYSTROKE_GAP_MS.
@@ -129,6 +287,78 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
     if (timerRef.current) clearTimeout(timerRef.current);
   }, []);
 
+  // Closes an exit checklist, warning in gold on anything still unticked and
+  // filing the audit row for it. The exit itself is never in question here —
+  // the person was already released by their own tap in step 1 — so this is
+  // pure record-keeping: it always clears the prompt, and only touches the
+  // network when there is something missing to log.
+  const closeExitPrompt = useCallback(async () => {
+    // A second dispatch (double-tap, or a touchscreen's emulated + native
+    // click) reaching this closure before setDevicePrompt(null) commits would
+    // otherwise see the same non-null prompt and file the same audit row
+    // twice. Ignore it, never queue it — there is nothing to queue.
+    if (closingRef.current) return;
+    const p = devicePrompt;
+    if (!p || p.mode !== "exit") return;
+    closingRef.current = true;
+    try {
+      const missing = p.expected.filter((e) => !p.seen.some((s) => s.id === e.id));
+      setDevicePrompt(null);
+      if (missing.length === 0) return;
+      setDeviceWarning(missing);
+      if (!config) return;
+      // Fire-and-log. The person is already outside — a failed audit write must
+      // never hold the terminal, and the guard has the warning on screen either
+      // way. Matches how liveHub.notifyScan is treated at the end of a tap.
+      try {
+        await fetch(`${API_BASE}/scan/gadget-session`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Gate-Key": config.key },
+          body: JSON.stringify({
+            person_id: p.personId,
+            missing_gadget_ids: missing.map((m) => m.id),
+          }),
+        });
+      } catch (err) {
+        console.error("[gate] gadget session close failed", err);
+      }
+    } finally {
+      // Reset unconditionally — including when the POST above throws — so a
+      // later, genuinely new prompt is not stranded unable to close.
+      closingRef.current = false;
+    }
+  }, [devicePrompt, config]);
+
+  // Closes itself once the last expected device is read, so the guard does not
+  // have to press anything in the normal case.
+  useEffect(() => {
+    if (devicePrompt?.mode !== "exit") return;
+    if (devicePrompt.expected.length === 0) return;
+    const allSeen = devicePrompt.expected.every((e) =>
+      devicePrompt.seen.some((s) => s.id === e.id),
+    );
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- this synchronizes devicePrompt with an external event (the last expected device being read by the physical RFID reader), not with other React state.
+    if (allSeen) setDevicePrompt(null);
+  }, [devicePrompt]);
+
+  // Closes an unattended prompt so the next person does not tap into someone
+  // else's session. Resets on every device tap, not on a fixed deadline: a guard
+  // checking three laptops must not be cut off mid-queue.
+  useEffect(() => {
+    if (!devicePrompt) return;
+    const t = setTimeout(() => {
+      // An exit prompt that times out with devices unticked must still file
+      // the audit row — see closeExitPrompt. The entry lane has no such
+      // record to keep, so it simply drops the prompt.
+      if (devicePrompt.mode === "exit") {
+        void closeExitPrompt();
+      } else {
+        setDevicePrompt(null);
+      }
+    }, 30_000);
+    return () => clearTimeout(t);
+  }, [devicePrompt, closeExitPrompt]);
+
   const handleUid = useCallback(async (uid: string) => {
     if (!config) return;
     // Ignore, never queue: a queued tap would let the next person through on a
@@ -138,6 +368,9 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
 
     busyRef.current = true;
     setPending(true);
+    // Cleared on every new tap so a previous exit's gold warning never lingers
+    // over an unrelated scan.
+    setDeviceWarning(null);
     // releasedByTimer tracks whether the auto-reset timer below has taken
     // ownership of releasing busyRef. The finally block only releases it
     // itself when that hand-off never happened (early return or a throw) —
@@ -148,9 +381,27 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
       const result = await postTap(config.key, uid);
 
       if (result.state === "unauthorized") {
-        // The key is dead. Say so rather than silently refusing to grant.
+        // The key is dead. Say so rather than refusing to grant.
         clearStoredGate(routeId);
         setConfig(null);
+        return;
+      }
+
+      // A device tap while the prompt is open ticks a line instead of replacing the
+      // whole screen. Deduped by id so a double-read of the same sticker — common
+      // when someone holds it against the reader — does not list it twice.
+      if (
+        devicePrompt &&
+        (result.state === "granted" || result.state === "denied") &&
+        result.person?.type === "gadget" &&
+        result.access_result === "granted"
+      ) {
+        const g = result.person.gadgets?.[0];
+        if (g) {
+          setDevicePrompt((p) =>
+            p && !p.seen.some((s) => s.id === g.id) ? { ...p, seen: [...p.seen, g] } : p,
+          );
+        }
         return;
       }
 
@@ -178,6 +429,61 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
             ...r,
           ].slice(0, RECENT_LIMIT)
         );
+
+        // The gadget lane opens the prompt on a granted PERSON tap. A gadget tap
+        // arriving while the prompt is open is handled above and must not reopen it.
+        if (
+          meta.gadgetFocus &&
+          result.access_result === "granted" &&
+          result.person?.type !== "gadget" &&
+          result.person?.person_id
+        ) {
+          setDevicePrompt({
+            mode: "entry",
+            personId: result.person.person_id,
+            expected: [],
+            seen: [],
+          });
+        }
+
+        // Keyed on gadgets_inside, NOT on the route. The server sends this only on a
+        // granted person EXIT tap and only when devices are actually still inside, so
+        // every other tap on this terminal behaves exactly as it did before.
+        if (
+          meta.direction === "exit" &&
+          result.access_result === "granted" &&
+          result.person?.person_id &&
+          (result.person.gadgets_inside?.length ?? 0) > 0
+        ) {
+          // Person B tapping out while person A's checklist is still open used
+          // to overwrite it with a plain setDevicePrompt. That silently
+          // destroyed A's audit row: the 30s timeout effect is keyed on
+          // devicePrompt, so replacing the prompt runs the effect's cleanup,
+          // clearing A's timer before it ever fired — and closeExitPrompt,
+          // which is the ONLY thing that writes gadget_not_returned, never ran
+          // for A. Their unreturned devices went unrecorded, which is the one
+          // fact this whole lane exists to record.
+          //
+          // AWAITED, not fire-and-forget, and that is load-bearing against
+          // closingRef: closeExitPrompt sets that guard on entry and clears it
+          // in its finally, so a `void` call here would open B's prompt while
+          // the guard was still raised for A's in-flight POST — and B's own
+          // close would then hit the `if (closingRef.current) return` and be
+          // skipped, turning one lost audit row into two. Awaiting resolves
+          // after the finally, so the guard is down before B's prompt exists.
+          //
+          // Nothing about B's passage waits on this: the barrier decision was
+          // made server-side and setOutcome already rendered it above. Only
+          // the checklist is sequenced. A no-op when nothing is open —
+          // closeExitPrompt returns immediately unless an exit prompt exists.
+          await closeExitPrompt();
+          setDevicePrompt({
+            mode: "exit",
+            personId: result.person.person_id,
+            expected: result.person.gadgets_inside!,
+            seen: [],
+          });
+        }
       }
 
       if (timerRef.current) clearTimeout(timerRef.current);
@@ -195,7 +501,7 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
       setPending(false);
       if (!releasedByTimer) busyRef.current = false;
     }
-  }, [config, routeId]);
+  }, [config, routeId, devicePrompt, meta, closeExitPrompt]);
 
   // Global listener: the reader is a keyboard, but no longer one we keep
   // focused. Every keystroke on the page is inspected instead, so a tap is
@@ -302,8 +608,15 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
             changes underneath it four ways, and small text at 14px cannot clear
             4.5:1 against the yellow and orange ones. On navy it is fixed at
             11.5:1, and gold works as an accent again. */}
-        <header className="-mx-8 -mt-6 flex items-baseline justify-between bg-ink px-8 py-3 text-white">
-          <p className="font-display text-lg font-700 uppercase tracking-[0.12em]">{config.name}</p>
+        {/* items-center, not items-baseline: the seal has no text baseline to
+            sit on, and baseline alignment would hang it below the gate name. */}
+        <header className="-mx-8 -mt-6 flex items-center justify-between bg-ink px-8 py-3 text-white">
+          <div className="flex items-center gap-3">
+            <NcstMark className="h-8 w-8 shrink-0" />
+            <p className="font-display text-lg font-700 uppercase tracking-[0.12em]">
+              {config.name}
+            </p>
+          </div>
           <p className="text-sm font-600 uppercase tracking-[0.18em]">
             {meta.type} <span className="opacity-60">/</span>{" "}
             <span className="font-700 tracking-[0.24em] text-gold">{meta.direction}</span>
@@ -311,8 +624,56 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
         </header>
 
         <div className="flex flex-1 items-center justify-center">
-          {!outcome && !pending && (
+          {!outcome && !pending && !devicePrompt && !deviceWarning && (
             <GateIdleScene gateType={meta.type} direction={meta.direction} />
+          )}
+
+          {/* Once the granted card below auto-resets after RESET_MS, the
+              device prompt keeps the screen open on its own — it is driven
+              by devicePrompt, not by outcome. */}
+          {!outcome && !pending && devicePrompt?.mode === "entry" && (
+            <DevicePromptPanel
+              prompt={devicePrompt}
+              gateKey={config.key}
+              onDone={() => setDevicePrompt(null)}
+            />
+          )}
+
+          {/* Same standalone survival as the entry prompt above, for the exit
+              checklist. Done here always runs closeExitPrompt, which is the
+              only path that both clears the prompt and — if anything is
+              still unticked — warns and files the audit row. */}
+          {!outcome && !pending && devicePrompt?.mode === "exit" && (
+            <DevicePromptPanel
+              prompt={devicePrompt}
+              gateKey={config.key}
+              onDone={() => void closeExitPrompt()}
+            />
+          )}
+
+          {/* The exit is never refused — this is a record-keeping notice, not
+              a denial, so it is gold with navy text like the no-device panel
+              above, never red. Rendered whenever nothing else is claiming the
+              center of the screen, so it survives past RESET_MS the same way
+              the device prompts above it do. */}
+          {!outcome && !pending && !devicePrompt && deviceWarning && (
+            <div className="w-full text-center">
+              <div className="mx-auto max-w-xl rounded-2xl bg-gold px-6 py-5 text-navy">
+                <p className="font-display text-4xl font-700 uppercase tracking-tight">
+                  Device not returned
+                </p>
+                <div className="mt-3 space-y-2 text-left">
+                  {deviceWarning.map((g) => (
+                    <p key={g.id} className="text-xl font-600">
+                      <span className="capitalize">{g.gadget_type}</span> · {g.brand_model}
+                      {" · SN "}
+                      <span className="font-mono">{g.serial_number}</span>
+                    </p>
+                  ))}
+                </div>
+                <p className="mt-3 text-lg">Logged. This did not block the exit.</p>
+              </div>
+            </div>
           )}
 
           {/* In flight. The skeleton mirrors the result card below, so the real
@@ -338,6 +699,78 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
               <p className="text-center font-display text-7xl font-700 uppercase tracking-tight">
                 {outcome.access_result}
               </p>
+              {/* The lane the tap was recorded against. Present on every route,
+                  not just the gadget lane: the header band names the gate too,
+                  but the guard reads the result card, and two person/entry
+                  terminals now exist that are otherwise identical on screen. */}
+              <p className="mt-1 text-center text-lg font-600 uppercase tracking-[0.18em] opacity-70">
+                {config.name}
+              </p>
+
+              {/* GADGET LANE ONLY. Hoisted above the face because at this lane
+                  the serial IS the job — the guard compares it to the laptop in
+                  the person's hands — and a serial set below the fold in 24px
+                  is a check nobody performs. The ordinary person-entry lane
+                  keeps its compact inline list further down. */}
+              {meta.gadgetFocus && outcome.access_result === "granted" && (
+                <div className="mt-6">
+                  {outcome.person?.gadgets && outcome.person.gadgets.length > 0 ? (
+                    <div className="rounded-2xl bg-current/15 px-6 py-4">
+                      {outcome.person.gadgets.map((g, i) => (
+                        <div key={i} className={i > 0 ? "mt-3 border-t border-current/20 pt-3" : ""}>
+                          <p className="text-xl font-600 uppercase tracking-[0.18em] opacity-70">
+                            <span className="capitalize">{g.gadget_type}</span> · {g.brand_model}
+                          </p>
+                          <p className="font-mono text-5xl font-700 leading-tight">
+                            {g.serial_number}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    /* Gold, not red: this is a prompt to send someone to
+                       register, not a refusal. The gadget registry denies
+                       nothing by design (see scan.service.ts:390), and the tap
+                       above this panel still reads GRANTED. Gold carries navy
+                       text per the tone note above. */
+                    <div className="rounded-2xl bg-gold px-6 py-4 text-center text-navy">
+                      <p className="font-display text-4xl font-700 uppercase tracking-tight">
+                        No device registered
+                      </p>
+                      <p className="mt-1 text-xl font-600">
+                        Admitted. Send them to register any device they are carrying.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* The device checklist starts as soon as the person is granted.
+                  Shown here so the guard sees it immediately, before RESET_MS
+                  pulls this card away — see the standalone panel above for
+                  what keeps showing it afterward. */}
+              {meta.gadgetFocus && devicePrompt?.mode === "entry" && (
+                <div className="mt-6">
+                  <DevicePromptPanel
+                    prompt={devicePrompt}
+                    gateKey={config.key}
+                    onDone={() => setDevicePrompt(null)}
+                  />
+                </div>
+              )}
+
+              {/* The ordinary exit's checklist, keyed on gadgets_inside rather
+                  than on meta.gadgetFocus (this route is never gadgetFocus) —
+                  see the comment on where devicePrompt is set in handleUid. */}
+              {devicePrompt?.mode === "exit" && (
+                <div className="mt-6">
+                  <DevicePromptPanel
+                    prompt={devicePrompt}
+                    gateKey={config.key}
+                    onDone={() => void closeExitPrompt()}
+                  />
+                </div>
+              )}
               <div className="mt-8 flex items-center justify-center gap-8">
                 {/* Vehicle gates lead with the vehicle: it is the thing the
                     guard is looking at. The owner's face sits beside it,
@@ -415,15 +848,20 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
                       rather than a photo frame: a picture of a black laptop
                       distinguishes it from no other black laptop, and a third
                       frame would compete with the owner's face. */}
-                  {outcome.person?.gadgets?.map((g, i) => (
-                    <p key={i} className="mt-1 text-2xl">
-                      <span className="capitalize">{g.gadget_type}</span>
-                      {" · "}
-                      {g.brand_model}
-                      {" · SN "}
-                      <span className="font-mono font-700">{g.serial_number}</span>
-                    </p>
-                  ))}
+                  {/* Suppressed on the gadget lane, where the same devices are
+                      already shown full size above. Rendering both would put
+                      the serial on screen twice at two sizes, which invites the
+                      guard to read the smaller one. */}
+                  {!meta.gadgetFocus &&
+                    outcome.person?.gadgets?.map((g, i) => (
+                      <p key={i} className="mt-1 text-2xl">
+                        <span className="capitalize">{g.gadget_type}</span>
+                        {" · "}
+                        {g.brand_model}
+                        {" · SN "}
+                        <span className="font-mono font-700">{g.serial_number}</span>
+                      </p>
+                    ))}
                   {outcome.reason && (
                     <p className="mt-2 text-2xl">
                       {reasonText(outcome.reason)}

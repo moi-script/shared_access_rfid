@@ -48,6 +48,7 @@ export default function GadgetForm({
     gadget_type: GADGET_TYPES[0] as string,
     brand_model: "",
     serial_number: "",
+    rfid_uid: "",
   });
 
   // Owner search — the same debounced generation-ref pattern
@@ -117,10 +118,16 @@ export default function GadgetForm({
       setError("Select the owner from the directory first.");
       return;
     }
+    // rfid_uid is optional — a gadget can be registered before its sticker
+    // arrives — so this only fires when something was actually typed.
+    if (form.rfid_uid.trim() && !/^[0-9A-Fa-f]{6,32}$/.test(form.rfid_uid.trim())) {
+      setError("RFID must be 6-32 hex characters");
+      return;
+    }
     setError(null);
     setSaving(true);
     try {
-      const created = await apiPost<GadgetRecord>("/gadgets", {
+      const payload: Record<string, string> = {
         owner_person_id: owner._id,
         gadget_type: form.gadget_type,
         brand_model: form.brand_model.trim(),
@@ -129,7 +136,11 @@ export default function GadgetForm({
         // produced by one expression — doing it here as well would put a second
         // normalizer on a client that cannot be the authority for it.
         serial_number: form.serial_number,
-      });
+      };
+      // Only sent when non-empty, mirroring PersonForm — the backend rejects
+      // an empty rfid_uid outright.
+      if (form.rfid_uid.trim()) payload.rfid_uid = form.rfid_uid.trim();
+      const created = await apiPost<GadgetRecord>("/gadgets", payload);
       if (photo) {
         try {
           const fd = new FormData();
@@ -348,6 +359,16 @@ export default function GadgetForm({
           Case and spacing don&apos;t matter — the serial is stored uppercase. One device
           can only be registered to one person.
         </p>
+
+        <label className="block text-[13px] font-600 text-ink-soft">
+          RFID sticker UID (optional)
+          <input
+            value={form.rfid_uid}
+            onChange={(e) => set("rfid_uid", e.target.value)}
+            placeholder="Leave blank if the sticker hasn't arrived yet"
+            className={`mt-1 font-mono ${inputCls}`}
+          />
+        </label>
 
         <PhotoCapture onChange={setPhoto} />
 

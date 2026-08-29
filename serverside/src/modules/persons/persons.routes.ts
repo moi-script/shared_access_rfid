@@ -12,6 +12,8 @@ import {
   statusSchema,
   reassignRfidSchema,
   importPersonsSchema,
+  bulkPreviewSchema,
+  bulkStatusSchema,
 } from './persons.schema';
 
 export const personRoutes = Router();
@@ -58,6 +60,25 @@ personRoutes.get('/export', personController.export);
 // exists solely so a superadmin can find someone to restore, not as a wider
 // directory read for registrar/hr/oss.
 personRoutes.get('/deleted', authorize(ROLES.SUPERADMIN), personController.listDeleted);
+
+// Above `/:id` for the same Express-ordering reason as `/deleted` — otherwise
+// 'bulk-status' is captured as an id. Same four roles as `/:id/status` below,
+// and for the same reason: the route guard is not what restricts these. Domain
+// scoping inside personService.resolveBulkTargets is, and it is what stops a
+// registrar's "Deactivate All" from reaching staff, or HR's from reaching
+// students, no matter how wide the filter they send.
+personRoutes.get(
+  '/bulk-status/preview',
+  authorize(ROLES.SUPERADMIN, ROLES.REGISTRAR, ROLES.HR, ROLES.OSS),
+  validate(bulkPreviewSchema, 'query'),
+  personController.bulkPreview
+);
+personRoutes.post(
+  '/bulk-status',
+  authorize(ROLES.SUPERADMIN, ROLES.REGISTRAR, ROLES.HR, ROLES.OSS),
+  validate(bulkStatusSchema),
+  personController.bulkSetStatus
+);
 
 personRoutes.get('/:id/overview', personController.overview);
 personRoutes.get('/:id', personController.get);

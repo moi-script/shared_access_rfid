@@ -19,8 +19,11 @@ export default function BrandPanel() {
           <p className="font-display text-lg font-700 tracking-tight text-ink">
             NCST
           </p>
-          <p className="text-[11px] font-500 uppercase tracking-[0.22em] text-ink-soft">
-            RFID Access
+          {/* Tracking is tighter than the 0.22em this line used to carry as
+              "RFID Access": the full system name is twice as long, and the wide
+              letterspacing pushed it past the panel's padding. */}
+          <p className="text-[11px] font-500 uppercase tracking-[0.14em] text-ink-soft">
+            Centralized RFID System
           </p>
         </div>
       </div>

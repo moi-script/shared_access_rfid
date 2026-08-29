@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, apiGetList, apiGetBlob, getStoredUser } from "@/lib/auth";
+import { apiGet, apiGetList, apiGetBlob, apiPatch, apiPost, getStoredUser } from "@/lib/auth";
 import PersonForm from "@/components/PersonForm";
 import PersonEditForm from "@/components/PersonEditForm";
 import ReplaceCardDialog from "@/components/ReplaceCardDialog";
@@ -23,11 +23,22 @@ interface Person {
   department_section: string | null;
   contact_email: string | null;
   rfid_uid: string;
-  status: "active" | "inactive";
+  // 'pending' is real and reachable: personService.create assigns it to anyone
+  // registered without a card. It was missing here, which made the row toggle
+  // look total when it was not — the badge renders every non-active state the
+  // same way, and the toggle offers "Activate" for all of them.
+  status: "active" | "inactive" | "pending";
   createdAt?: string;
 }
 
 type TypeFilter = "all" | "student" | "staff" | "employee";
+
+interface Preview {
+  matched: number;
+  excluded: number;
+}
+
+const CONFIRM_WORD = "DEACTIVATE";
 
 const TYPES: { value: TypeFilter; label: string }[] = [
   { value: "all", label: "All types" },
@@ -57,6 +68,20 @@ export default function StudentsDirectory({
   // Unused while the Delete button above is commented out; kept for re-arming.
   // const [deletePerson, setDeletePerson] = useState<Person | null>(null);
   const [restorePerson, setRestorePerson] = useState<Person | null>(null);
+
+  // Status changes — the per-row toggle and the whole-filter sweep. `busy`
+  // covers both so a second click cannot race the first, and `result` reports
+  // what a sweep actually did (a filter can match people this actor may not
+  // write, and those are silently excluded server-side).
+  const [busy, setBusy] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<Preview | null>(null);
+  // Which direction the open confirm dialog is for. Held separately from
+  // `confirming` because the preview count alone does not say which way it
+  // points, and the dialog wording and the write both depend on it.
+  const [sweepStatus, setSweepStatus] = useState<"active" | "inactive">("inactive");
+  const [typed, setTyped] = useState("");
 
   // Delete and restore are superadmin-only in the UI; the server enforces
   // this regardless, this is only a usability layer.
@@ -137,6 +162,96 @@ export default function StudentsDirectory({
     const t = setTimeout(fetchDeletedRows, 0);
     return () => clearTimeout(t);
   }, [showDeleted, fetchDeletedRows]);
+
+  /**
+   * The filter the sweep acts on: whatever the directory is currently showing.
+   * Shared with exportCsv below rather than rebuilt, so "Deactivate all" can
+   * never act on a different set than the one on screen — the failure that
+   * would make this control genuinely dangerous.
+   */
+  const bulkFilter = useCallback(() => {
+    const f: Record<string, string> = {};
+    if (type !== "all") f.type = type;
+    if (section !== "all") f.section = section;
+    if (search.trim()) f.search = search.trim();
+    return f;
+  }, [type, section, search]);
+
+  // The same three filters in words, so the confirm dialog names what it is
+  // about to sweep instead of only counting it. An empty list is the dangerous
+  // case (no filter = everyone) and the dialog says so explicitly.
+  const filterWords = [
+    type !== "all" ? `type ${type}` : null,
+    section !== "all" ? `section ${section}` : null,
+    search.trim() ? `matching "${search.trim()}"` : null,
+  ].filter(Boolean);
+
+  async function toggleOne(p: Person) {
+    setBusy(true);
+    setStatusError(null);
+    setResult(null);
+    try {
+      const status = p.status === "active" ? "inactive" : "active";
+      await apiPatch(`/persons/${p._id}/status`, { status });
+      fetchRows();
+    } catch (err) {
+      setStatusError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Fetched on click rather than alongside every directory load, because the
+   * count depends on the DIRECTION: reactivation excludes people whose linked
+   * login an administrator deactivated, deactivation excludes nobody on that
+   * ground. One preview rendered on the button would therefore be right for at
+   * most one of the two actions — and wrong silently.
+   */
+  async function openSweep(status: "active" | "inactive") {
+    setBusy(true);
+    setStatusError(null);
+    setResult(null);
+    try {
+      const params = new URLSearchParams({ ...bulkFilter(), status });
+      const pv = await apiGet<Preview>(`/persons/bulk-status/preview?${params.toString()}`);
+      setConfirming(pv);
+      setSweepStatus(status);
+    } catch (err) {
+      setStatusError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runSweep(status: "active" | "inactive") {
+    setBusy(true);
+    setStatusError(null);
+    try {
+      const res = await apiPost<{ matched: number; modified: number; excluded: number }>(
+        "/persons/bulk-status",
+        { status, filter: bulkFilter() },
+      );
+      setConfirming(null);
+      setTyped("");
+      const verb = status === "active" ? "Activated" : "Deactivated";
+      setResult(
+        `${verb} ${res.modified} of ${res.matched} matching ${
+          res.matched === 1 ? "person" : "people"
+        }` +
+          (res.excluded
+            ? `. ${res.excluded} outside your authority ${
+                res.excluded === 1 ? "was" : "were"
+              } left unchanged.`
+            : "."),
+      );
+      fetchRows();
+    } catch (err) {
+      setStatusError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function exportCsv() {
     const params = new URLSearchParams();
@@ -254,12 +369,47 @@ export default function StudentsDirectory({
                 </option>
               ))}
             </select>
+
+            {/* Acts on the filter above, not on a selection — so what the two
+                buttons reach is always exactly what the table is showing. */}
+            <button
+              type="button"
+              onClick={() => void openSweep("inactive")}
+              disabled={busy}
+              className="rounded-xl border-2 border-red bg-red/25 px-4 py-2 text-[13px] font-600 text-ink transition hover:bg-red/45 disabled:opacity-40"
+            >
+              Deactivate all
+            </button>
+            <button
+              type="button"
+              onClick={() => void openSweep("active")}
+              disabled={busy}
+              className="rounded-xl border border-line bg-white px-4 py-2 text-[13px] font-600 text-ink-soft transition hover:text-navy disabled:opacity-40"
+            >
+              Activate all
+            </button>
           </div>
+
+          <p className="mt-2 text-[12px] text-ink-soft">
+            Deactivating refuses a person&rsquo;s card at every gate and blocks any new
+            vehicle or gadget registration in their name. Their existing registrations
+            are left as they are.
+          </p>
 
           {error && (
             <Notice compact className="mt-3 text-[13px] text-ink">
               {error}
             </Notice>
+          )}
+          {statusError && (
+            <Notice compact className="mt-3 text-[13px] text-ink">
+              {statusError}
+            </Notice>
+          )}
+          {result && (
+            <p className="mt-3 rounded-xl bg-paper px-4 py-2 text-[13px] text-ink-soft">
+              {result}
+            </p>
           )}
 
           {/* Table */}
@@ -325,6 +475,24 @@ export default function StudentsDirectory({
                             className="text-blue hover:underline"
                           >
                             Replace card
+                          </button>
+                          {/* stopPropagation because the whole row is a link
+                              into the profile — without it, deactivating
+                              someone also navigates away from the list. */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void toggleOne(p);
+                            }}
+                            disabled={busy}
+                            className={
+                              p.status === "active"
+                                ? "text-ink underline decoration-red decoration-2 underline-offset-2 hover:decoration-[3px] disabled:opacity-40"
+                                : "text-blue hover:underline disabled:opacity-40"
+                            }
+                          >
+                            {p.status === "active" ? "Deactivate" : "Activate"}
                           </button>
                           {/* Delete button — see the note by the DeletePersonDialog mount below.
                           {isSuperadmin && (
@@ -484,6 +652,76 @@ export default function StudentsDirectory({
             fetchDeletedRows();
           }}
         />
+      )}
+
+      {confirming && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy/40 p-6">
+          <div className="w-full max-w-md rounded-2xl border border-line bg-white p-6">
+            <h2 className="font-display text-lg font-700 text-navy">
+              {sweepStatus === "inactive" ? "Deactivate" : "Activate"} {confirming.matched}{" "}
+              {confirming.matched === 1 ? "person" : "people"}?
+            </h2>
+            <p className="mt-2 text-sm text-ink-soft">
+              {filterWords.length
+                ? `This affects everyone in the directory with ${filterWords.join(", ")}.`
+                : "This affects every student, staff member, and employee in the directory."}
+            </p>
+            <p className="mt-2 text-sm text-ink-soft">
+              {sweepStatus === "inactive"
+                ? "Their cards will be refused at every gate, and no new vehicle or gadget can be registered to them. Vehicles and gadgets they already have are not changed."
+                : "Their cards will be accepted at the gates again, and they can register vehicles and gadgets."}
+              {confirming.excluded
+                ? ` ${confirming.excluded} ${
+                    confirming.excluded === 1 ? "person is" : "people are"
+                  } outside your authority and will be left unchanged.`
+                : ""}
+            </p>
+
+            {/* Typed confirmation on the closing direction only. Reactivation
+                is the recoverable one — a wrong deactivation locks real people
+                out of the campus until someone notices. */}
+            {sweepStatus === "inactive" && (
+              <label className="mt-4 block text-xs font-600 uppercase tracking-[0.12em] text-ink-soft">
+                Type {CONFIRM_WORD} to confirm
+                <input
+                  value={typed}
+                  onChange={(e) => setTyped(e.target.value)}
+                  className="mt-1 block w-full rounded-xl border border-line px-3 py-2 text-sm text-ink"
+                  autoFocus
+                />
+              </label>
+            )}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirming(null);
+                  setTyped("");
+                }}
+                className="rounded-xl border border-line px-4 py-2 text-sm font-600 text-ink-soft"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void runSweep(sweepStatus)}
+                disabled={
+                  busy ||
+                  confirming.matched === 0 ||
+                  (sweepStatus === "inactive" && typed !== CONFIRM_WORD)
+                }
+                className={
+                  sweepStatus === "inactive"
+                    ? "rounded-xl border-2 border-red bg-red/25 px-4 py-2 text-sm font-600 text-ink disabled:opacity-40"
+                    : "rounded-xl bg-navy px-4 py-2 text-sm font-600 text-white disabled:opacity-40"
+                }
+              >
+                {sweepStatus === "inactive" ? "Deactivate" : "Activate"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

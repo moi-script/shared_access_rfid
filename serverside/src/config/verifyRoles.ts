@@ -325,8 +325,21 @@ async function runChecks(): Promise<void> {
 
   expectEqual('registrar writes only students', WRITE_DOMAINS[ROLES.REGISTRAR].join(','), 'person:student');
   expectEqual('hr writes staff and employee', WRITE_DOMAINS[ROLES.HR].join(','), 'person:staff,person:employee');
-  expectEqual('oss writes vehicles and gadgets', WRITE_DOMAINS[ROLES.OSS].join(','), 'vehicle,gadget');
-  expectEqual('oss writes no person type', WRITE_DOMAINS[ROLES.OSS].some((d) => d.startsWith('person:')), false);
+  // OSS now holds the registrar's and HR's person domains on top of its own.
+  expectEqual(
+    'oss writes every person type plus vehicles and gadgets',
+    WRITE_DOMAINS[ROLES.OSS].join(','),
+    'person:student,person:staff,person:employee,vehicle,gadget'
+  );
+  expectEqual(
+    'oss matches superadmin exactly on write domains',
+    WRITE_DOMAINS[ROLES.OSS].join(','),
+    WRITE_DOMAINS[ROLES.SUPERADMIN].join(',')
+  );
+  // The widening must not have leaked into registrar or hr — they keep exactly
+  // what they had, which is what "combine into OSS" means as against "merge".
+  expectEqual('registrar still writes only students', WRITE_DOMAINS[ROLES.REGISTRAR].join(','), 'person:student');
+  expectEqual('hr still writes only staff and employee', WRITE_DOMAINS[ROLES.HR].join(','), 'person:staff,person:employee');
   expectEqual('staff writes nothing', WRITE_DOMAINS[ROLES.STAFF].length, 0);
   expectEqual('student writes nothing', WRITE_DOMAINS[ROLES.STUDENT].length, 0);
   expectEqual('personDomain maps staff', personDomain('staff'), 'person:staff');
@@ -351,11 +364,60 @@ async function runChecks(): Promise<void> {
 
   // assertCanActOn — rank
   expectEqual('superadmin may act on hr', denies(() => assertCanActOn(superActor, { _id: 'cccccccccccccccccccccccc', role: ROLES.HR })), false);
-  expectEqual('superadmin may not act on a peer superadmin', denies(() => assertCanActOn(superActor, { _id: 'cccccccccccccccccccccccc', role: ROLES.SUPERADMIN })), true);
+  // Superadmins are peers with identical authority — see isSuperadminPeer.
+  // This assertion used to read "may not"; it is the rule that changed.
+  expectEqual('superadmin may act on a peer superadmin', denies(() => assertCanActOn(superActor, { _id: 'cccccccccccccccccccccccc', role: ROLES.SUPERADMIN })), false);
   expectEqual('hr may act on a student', denies(() => assertCanActOn(hrActor, { _id: 'cccccccccccccccccccccccc', role: ROLES.STUDENT })), false);
   expectEqual('hr may not act on a peer registrar', denies(() => assertCanActOn(hrActor, { _id: 'cccccccccccccccccccccccc', role: ROLES.REGISTRAR })), true);
   expectEqual('hr may not act on a superadmin', denies(() => assertCanActOn(hrActor, { _id: 'cccccccccccccccccccccccc', role: ROLES.SUPERADMIN })), true);
   expectEqual('nobody may act on themselves', denies(() => assertCanActOn(superActor, { _id: superActor.id, role: ROLES.STUDENT })), true);
+
+  // The superadmin peer exception, and its exact boundaries. A superadmin may
+  // manage another superadmin — otherwise the peer they can now create would
+  // be unreachable the moment it exists.
+  expectEqual(
+    'superadmin MAY act on another superadmin',
+    denies(() => assertCanActOn(superActor, { _id: 'ffffffffffffffffffffffff', role: ROLES.SUPERADMIN })),
+    false
+  );
+  // ...but NOT on their own account. Self-protection is checked before the
+  // peer exception and is what stops the last admin locking everyone out, so
+  // it must survive the relaxation.
+  expectEqual(
+    'a superadmin still may NOT act on their own account',
+    denies(() => assertCanActOn(superActor, { _id: superActor.id, role: ROLES.SUPERADMIN })),
+    true
+  );
+  // The exception is superadmin-only. If it had been written as a rank
+  // comparison instead of an explicit both-are-superadmin test, these would
+  // start passing the moment any role reached the same rank.
+  expectEqual(
+    'oss still may NOT act on an oss peer',
+    denies(() => assertCanActOn({ id: 'dddddddddddddddddddddddd', role: ROLES.OSS }, { _id: 'cccccccccccccccccccccccc', role: ROLES.OSS })),
+    true
+  );
+  expectEqual(
+    'oss still may NOT act on a superadmin',
+    denies(() => assertCanActOn({ id: 'dddddddddddddddddddddddd', role: ROLES.OSS }, { _id: 'cccccccccccccccccccccccc', role: ROLES.SUPERADMIN })),
+    true
+  );
+  expectEqual(
+    'oss still may NOT create an oss peer',
+    denies(() => assertCanCreateRole({ id: 'dddddddddddddddddddddddd', role: ROLES.OSS }, ROLES.OSS)),
+    true
+  );
+  expectEqual(
+    'oss still may NOT create a superadmin',
+    denies(() => assertCanCreateRole({ id: 'dddddddddddddddddddddddd', role: ROLES.OSS }, ROLES.SUPERADMIN)),
+    true
+  );
+  // Bulk stays closed to every admin regardless of the peer exception: one
+  // mis-filtered sweep must never be able to disable all superadmins at once.
+  expectEqual(
+    'bulk still excludes superadmins for a superadmin actor',
+    bulkEligibleRoles(ROLES.SUPERADMIN).includes(ROLES.SUPERADMIN),
+    false
+  );
 
   // The self-check compares String(target._id) against actor.id because in
   // production the target's _id is an ObjectId and the actor's id is a string.
@@ -376,7 +438,10 @@ async function runChecks(): Promise<void> {
 
   // assertCanCreateRole — the hole a target-based check cannot see
   expectEqual('superadmin may create hr', denies(() => assertCanCreateRole(superActor, ROLES.HR)), false);
-  expectEqual('superadmin may NOT create a superadmin', denies(() => assertCanCreateRole(superActor, ROLES.SUPERADMIN)), true);
+  // Superadmins are peers with identical authority: one may create another,
+  // and (below) manage it afterwards. This is the ONE exception to peer
+  // protection — every other role still cannot create its own kind.
+  expectEqual('superadmin MAY create a superadmin', denies(() => assertCanCreateRole(superActor, ROLES.SUPERADMIN)), false);
   expectEqual('hr may create a student', denies(() => assertCanCreateRole(hrActor, ROLES.STUDENT)), false);
   expectEqual('hr may NOT create a peer hr', denies(() => assertCanCreateRole(hrActor, ROLES.HR)), true);
   expectEqual('hr may NOT create a registrar', denies(() => assertCanCreateRole(hrActor, ROLES.REGISTRAR)), true);
@@ -386,7 +451,9 @@ async function runChecks(): Promise<void> {
   expectEqual('hr may NOT write student persons', denies(() => assertCanWrite(hrActor, 'person:student')), true);
   expectEqual('hr may NOT write vehicles', denies(() => assertCanWrite(hrActor, 'vehicle')), true);
   expectEqual('oss may write vehicles', denies(() => assertCanWrite({ id: 'dddddddddddddddddddddddd', role: ROLES.OSS }, 'vehicle')), false);
-  expectEqual('oss may NOT write persons', denies(() => assertCanWrite({ id: 'dddddddddddddddddddddddd', role: ROLES.OSS }, 'person:student')), true);
+  expectEqual('oss may write student persons', denies(() => assertCanWrite({ id: 'dddddddddddddddddddddddd', role: ROLES.OSS }, 'person:student')), false);
+  expectEqual('oss may write staff persons', denies(() => assertCanWrite({ id: 'dddddddddddddddddddddddd', role: ROLES.OSS }, 'person:staff')), false);
+  expectEqual('oss may write employee persons', denies(() => assertCanWrite({ id: 'dddddddddddddddddddddddd', role: ROLES.OSS }, 'person:employee')), false);
   expectEqual('oss may write gadgets', denies(() => assertCanWrite({ id: 'dddddddddddddddddddddddd', role: ROLES.OSS }, 'gadget')), false);
   expectEqual('hr may NOT write gadgets', denies(() => assertCanWrite(hrActor, 'gadget')), true);
   expectEqual('registrar may NOT write gadgets', denies(() => assertCanWrite({ id: 'eeeeeeeeeeeeeeeeeeeeeeee', role: ROLES.REGISTRAR }, 'gadget')), true);
@@ -783,12 +850,15 @@ async function runChecks(): Promise<void> {
   }
   const otherSuperadminId = otherSuperadminRow.id;
 
+  // Peer protection no longer extends to superadmins: they are peers with
+  // identical authority, so one may deactivate another. This is the HTTP half
+  // of the isSuperadminPeer exception asserted at the unit level above.
   await check(
-    'superadmin cannot deactivate a peer superadmin individually (peer protection extends to superadmins)',
+    'superadmin CAN deactivate a peer superadmin individually',
     superadmin,
     'PATCH',
     `/users/${otherSuperadminId}/status`,
-    FORBIDDEN,
+    OK,
     { active: false }
   );
   const afterOtherAttempt = await request(superadmin, 'GET', '/users?limit=100');
@@ -796,8 +866,29 @@ async function runChecks(): Promise<void> {
     (u) => u.username === 'admin'
   );
   expectEqual(
-    'other superadmin login unaffected by the denied attempt',
+    'the peer superadmin is actually deactivated, not just reported OK',
     (otherAttemptRow as unknown as { is_active: boolean })?.is_active,
+    false
+  );
+
+  // Put it back immediately. This harness runs against a live seeded database
+  // and 'admin' is the prod-seeded superadmin — leaving it disabled would
+  // break every later check that assumes the seed is intact, and would leave
+  // the operator locked out of their own console after a verify run.
+  const restoreOtherSuper = await request(
+    superadmin,
+    'PATCH',
+    `/users/${otherSuperadminId}/status`,
+    { active: true }
+  );
+  expectEqual('peer superadmin reactivated', restoreOtherSuper.status, OK);
+  const afterRestoreSuper = await request(superadmin, 'GET', '/users?limit=100');
+  const restoredSuperRow = ((afterRestoreSuper.json.data ?? []) as typeof statusRows).find(
+    (u) => u.username === 'admin'
+  );
+  expectEqual(
+    'the seeded superadmin is active again',
+    (restoredSuperRow as unknown as { is_active: boolean })?.is_active,
     true
   );
 
@@ -1172,16 +1263,33 @@ async function runChecks(): Promise<void> {
   await check('hr cannot create a registrar', hr, 'POST', '/users', FORBIDDEN, {
     username: 'rbac-peer-reg', password: 'Verify@12345', role: 'registrar',
   });
-  await check('superadmin cannot create a superadmin', superadmin, 'POST', '/users', FORBIDDEN, {
+  // A superadmin CAN mint a peer superadmin — the one exception to the peer
+  // rule above, which still binds hr and everyone else. Created through
+  // request() rather than check() so the privileged account can be deleted
+  // again: a verify run must never leave a live superadmin login behind.
+  const peerSuper = await request(superadmin, 'POST', '/users', {
     username: 'rbac-peer-super', password: 'Verify@12345', role: 'superadmin',
   });
+  expectEqual('superadmin CAN create a peer superadmin', peerSuper.status, CREATED);
+  const peerSuperRow = peerSuper.json.data as { _id?: string; id?: string } | undefined;
+  const peerSuperId = peerSuperRow ? String(peerSuperRow._id ?? peerSuperRow.id) : '';
+
+  // And can then manage it — the point of relaxing assertCanActOn alongside
+  // assertCanCreateRole. A peer that could be created but never touched again
+  // is the failure mode that pairing them avoids.
+  if (peerSuperId) {
+    const peerOff = await request(superadmin, 'PATCH', `/users/${peerSuperId}/status`, {
+      active: false,
+    });
+    expectEqual('superadmin can deactivate the peer it just created', peerOff.status, OK);
+    const peerGone = await request(superadmin, 'DELETE', `/users/${peerSuperId}`);
+    expectEqual('superadmin can delete the peer it just created', peerGone.status, OK);
+  }
 
   console.log('\n== break-glass promotion ==');
 
-  // The API must never mint a superadmin, whoever asks.
-  await check('api refuses to create a superadmin', superadmin, 'POST', '/users', FORBIDDEN, {
-    username: 'rbac-api-super', password: 'Verify@12345', role: 'superadmin',
-  });
+  // The CLI promotion path still exists and is still how the FIRST superadmin
+  // is made — minting a peer over the API requires already being one.
 
   // Promotion is idempotent and refuses unknown usernames. Run against the
   // account that is ALREADY superadmin so the harness leaves no new privileged
@@ -1225,11 +1333,29 @@ async function runChecks(): Promise<void> {
     'hr cannot deactivate a peer registrar',
     hr, 'PATCH', `/users/${registrarRow!.id}/status`, FORBIDDEN, { active: false }
   );
-  await check(
-    'superadmin cannot deactivate a peer superadmin',
-    superadmin, 'PATCH', `/users/${rankUserRows.find((u) => u.role === 'superadmin')!.id}/status`,
-    FORBIDDEN, { active: false }
+  // A superadmin CAN deactivate a peer superadmin now.
+  //
+  // The target must EXCLUDE the acting account. A bare
+  // `.find(role === 'superadmin')` picks whichever row sorts first, which is
+  // 'testadmin' — this harness's own login — as soon as anything earlier in
+  // the run touches another superadmin and reorders the listing. Self-
+  // protection then denies it and the check fails for a reason that has
+  // nothing to do with the peer rule under test. Naming the peer explicitly
+  // makes the target independent of listing order.
+  const peerSuperRowForStatus = rankUserRows.find(
+    (u) => u.role === 'superadmin' && u.username !== 'testadmin'
   );
+  expectEqual('a peer superadmin exists to target', Boolean(peerSuperRowForStatus), true);
+  const peerSuperTargetId = peerSuperRowForStatus!.id;
+  await check(
+    'superadmin CAN deactivate a peer superadmin',
+    superadmin, 'PATCH', `/users/${peerSuperTargetId}/status`,
+    OK, { active: false }
+  );
+  const peerSuperBack = await request(superadmin, 'PATCH', `/users/${peerSuperTargetId}/status`, {
+    active: true,
+  });
+  expectEqual('that peer superadmin is reactivated afterwards', peerSuperBack.status, OK);
   // DOMAIN WINS over rank on this toggle. HR outranks a student account, but
   // the toggle also writes that student's Person, which HR may not write. All
   // four of these are needed: any one alone passes against a rank-only build.
@@ -1289,9 +1415,27 @@ async function runChecks(): Promise<void> {
   const personsForAttach = await request(superadmin, 'GET', '/persons?limit=1');
   const firstPerson = ((personsForAttach.json.data as { _id?: string; id?: string }[]) ?? [])[0];
   expectEqual('a person exists to attach', Boolean(firstPerson), true);
-  await check('oss cannot create a login for a person', oss, 'POST', '/users', FORBIDDEN, {
+  // OSS CAN now mint a login for a person, because POST /users gates on the
+  // person's write domain and OSS holds every person domain. This is a real
+  // power the widening handed it — creating logins is part of what the
+  // registrar and HR could do — so it is asserted rather than left implied.
+  //
+  // Uses request() instead of check() so the created row can be cleaned up:
+  // check() returns void, and a stray login would collide with this same
+  // username on the next run.
+  const ossMintedLogin = await request(oss, 'POST', '/users', {
     username: 'rbac-oss-login', password: 'Verify@12345', role: 'student',
     person_id: String(firstPerson!._id ?? firstPerson!.id),
+  });
+  expectEqual('oss CAN now create a login for a person', ossMintedLogin.status, CREATED);
+  const ossMintedId = ossMintedLogin.json.data as { _id?: string; id?: string } | undefined;
+  if (ossMintedId) {
+    await request(superadmin, 'DELETE', `/users/${String(ossMintedId._id ?? ossMintedId.id)}`);
+  }
+
+  // ...but the peer rule still binds it: rank, not domain, governs accounts.
+  await check('oss still cannot create an oss peer', oss, 'POST', '/users', FORBIDDEN, {
+    username: 'rbac-oss-peer', password: 'Verify@12345', role: 'oss',
   });
 
   // Bulk: a filter that WOULD match a peer must leave that peer untouched, and
@@ -1383,9 +1527,21 @@ async function runChecks(): Promise<void> {
     full_name: 'RBAC Probe Student 2', type: 'student',
     id_number: `${probeStudentId}-b`, department_section: 'BSIT 4-A',
   });
-  await check('oss may NOT create any person', oss, 'POST', '/persons', FORBIDDEN, {
-    full_name: 'RBAC Probe OSS', type: 'student',
+  // OSS now creates every person type — the registrar's student domain and
+  // HR's staff/employee domains, on top of its own vehicle and gadget ones.
+  // All three are exercised: a single student check would still pass if only
+  // the registrar half of the widening had landed.
+  await check('oss may create a student', oss, 'POST', '/persons', CREATED, {
+    full_name: 'RBAC Probe OSS Student', type: 'student',
     id_number: `${probeStudentId}-c`, department_section: 'BSIT 4-A',
+  });
+  await check('oss may create a staff member', oss, 'POST', '/persons', CREATED, {
+    full_name: 'RBAC Probe OSS Staff', type: 'staff',
+    id_number: `${probeStudentId}-d`, department_section: 'Registrar Office',
+  });
+  await check('oss may create an employee', oss, 'POST', '/persons', CREATED, {
+    full_name: 'RBAC Probe OSS Employee', type: 'employee',
+    id_number: `${probeStudentId}-e`, department_section: 'Maintenance',
   });
 
   // Type-change escalation, both directions.

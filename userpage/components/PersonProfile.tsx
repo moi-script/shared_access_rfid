@@ -8,7 +8,8 @@ import RegistrationForm, { type PersonRecord } from "@/components/RegistrationFo
 // itself is left in place.
 // import DeletePersonDialog from "@/components/DeletePersonDialog";
 import GadgetForm from "@/components/gadgets/GadgetForm";
-import { canRegisterGadgets } from "@/lib/permissions";
+import { canRegisterGadgets, canRegisterVehicles } from "@/lib/permissions";
+import ReplaceTagDialog, { type TagKind } from "@/components/ReplaceTagDialog";
 import type { Role } from "@/lib/auth";
 
 export default function PersonProfile({
@@ -33,6 +34,13 @@ export default function PersonProfile({
   const [showGadget, setShowGadget] = useState(false);
   const myRole = (getStoredUser()?.role ?? "staff") as Role;
   const canGadget = canRegisterGadgets(myRole);
+  const canVehicle = canRegisterVehicles(myRole);
+  // The row whose sticker is being swapped, or null. Holds the whole target
+  // rather than an id: the dialog shows the plate/model and the current tag,
+  // and re-deriving those from `data` after a refresh would race the reload.
+  const [tagTarget, setTagTarget] = useState<
+    { kind: TagKind; id: string; label: string; currentUid: string | null } | null
+  >(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -102,7 +110,40 @@ export default function PersonProfile({
 
       {loading && <p className="text-ink-soft">Loading {name ?? "profile"}…</p>}
       {error && <InfoBanner>Couldn&apos;t load profile: {error}</InfoBanner>}
-      {data && <ProfileView data={data} />}
+      {data && (
+        <ProfileView
+          data={data}
+          // Passed only when this operator may actually write to that domain.
+          // Omitted entirely otherwise, which is also what hides these controls
+          // on a student's own dashboard — it renders ProfileView with no
+          // callback at all. The API enforces the real boundary either way.
+          onReplaceTag={
+            canVehicle || canGadget
+              ? (kind, id, label, currentUid) => {
+                  if (kind === "vehicle" && !canVehicle) return;
+                  if (kind === "gadget" && !canGadget) return;
+                  setTagTarget({ kind, id, label, currentUid });
+                }
+              : undefined
+          }
+        />
+      )}
+
+      {tagTarget && (
+        <ReplaceTagDialog
+          kind={tagTarget.kind}
+          id={tagTarget.id}
+          label={tagTarget.label}
+          currentUid={tagTarget.currentUid}
+          onClose={() => setTagTarget(null)}
+          onReplaced={() => {
+            setTagTarget(null);
+            // Refetch rather than patching state: the swap also blocks the old
+            // tag, and the profile should show what the server now holds.
+            load();
+          }}
+        />
+      )}
 
       {showForm && record && (
         <RegistrationForm person={record} onClose={() => setShowForm(false)} />

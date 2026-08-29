@@ -6,9 +6,11 @@ import { getPagination, buildMeta } from '../../utils/pagination';
 import { Actor, assertCanWrite } from '../../utils/authority';
 import { nextSchoolYearEnd } from '../../utils/schoolYear';
 import { personRepo } from '../persons/persons.repository';
+import { assertOwnerRegistrable } from '../persons/personStatus';
 import { vehicleService, assertWithinLimit } from '../vehicles/vehicles.service';
 import { vehicleRepo } from '../vehicles/vehicles.repository';
 import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
+import { assertUidFree } from '../../utils/assertUidFree';
 import { VehicleType } from '../../constants/vehicleTypes';
 
 interface ListQuery {
@@ -106,6 +108,12 @@ export const vehicleApplicationService = {
 
     const owner = await personRepo.findById(input.owner_person_id);
     if (!owner) throw new ApiError('NOT_FOUND', 'Applicant not found');
+    // The third issue point, and the one that would otherwise stay open: this
+    // path writes its own application row and then calls vehicleService.create,
+    // so without a check here the application is filed first and only the
+    // vehicle write is refused — leaving the orphan application this method's
+    // own pre-checks below exist to prevent. Refused up front instead.
+    assertOwnerRegistrable(owner, 'vehicle');
 
     // Pre-check both uniqueness constraints the vehicle write would enforce
     // anyway. The write order below (application, then vehicle) is load-bearing
@@ -120,15 +128,7 @@ export const vehicleApplicationService = {
     // everyday typo as a cause of application litter. The real unique indexes
     // on vehicles.rfid_uid/plate_number remain what actually prevents a
     // duplicate vehicle from ever being created.
-    const existingRfid = await vehicleRepo.findByRfid(input.rfid_uid);
-    if (existingRfid) throw new ApiError('DUPLICATE_RFID');
-    // Pre-checked here for the same reason as DUPLICATE_RFID above: without
-    // it, the application writes first and only the vehicle insert fails,
-    // leaving an orphan application that is immutable by design.
-    const personWithRfid = await personRepo.findByRfid(input.rfid_uid);
-    if (personWithRfid) {
-      throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a person');
-    }
+    await assertUidFree(input.rfid_uid);
     // Pre-checked here for the same reason as DUPLICATE_RFID above: the write
     // order below is application-then-vehicle and applications are immutable,
     // so a limit breach discovered at the vehicle insert would leave an orphan

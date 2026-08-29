@@ -6,7 +6,12 @@ import { validate } from '../../middlewares/validate';
 import { scanLimiter } from '../../middlewares/rateLimiter';
 import { ROLES } from '../../constants/roles';
 import { scanController } from './scan.controller';
-import { tapSchema, tapDeviceSchema } from './scan.schema';
+import {
+  tapSchema,
+  tapDeviceSchema,
+  gadgetSessionSchema,
+  gadgetSessionDeviceSchema,
+} from './scan.schema';
 
 export const scanRoutes = Router();
 
@@ -30,4 +35,20 @@ function tapValidate(req: Request, res: Response, next: NextFunction): void {
 }
 
 scanRoutes.post('/tap', scanLimiter, tapAuth, tapValidate, scanController.tap);
+
+function gadgetSessionValidate(req: Request, res: Response, next: NextFunction): void {
+  const schema = req.gate ? gadgetSessionDeviceSchema : gadgetSessionSchema;
+  validate(schema)(req, res, next);
+}
+
+// Shares tapAuth and scanLimiter with /tap: it comes from the same terminals,
+// at the same rate, on the same credentials.
+scanRoutes.post(
+  '/gadget-session',
+  scanLimiter,
+  tapAuth,
+  gadgetSessionValidate,
+  scanController.gadgetSession
+);
+
 scanRoutes.get('/logs', authenticate, authorize(ROLES.SUPERADMIN), scanController.logs);

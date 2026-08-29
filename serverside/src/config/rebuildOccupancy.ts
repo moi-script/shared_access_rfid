@@ -18,7 +18,7 @@ import { OccupancyModel } from '../modules/occupancy/occupancy.model';
 import { lastResetBoundary } from '../utils/occupancyWindow';
 
 interface Pending {
-  entity_type: 'person' | 'vehicle';
+  entity_type: 'person' | 'vehicle' | 'gadget';
   entity_id: mongoose.Types.ObjectId;
   since: Date;
   last_gate_id: mongoose.Types.ObjectId | null;
