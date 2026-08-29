@@ -21,6 +21,13 @@ type Kind = 'person' | 'vehicle' | 'gadget';
  * that re-sends a row's current UID does not reject itself — the same exclusion
  * assertWithinLimit takes `excludeId` for. Omit it on create.
  *
+ * `ownerPersonId` is the ONE deliberate hole in "exactly one entity". A
+ * vehicle pass is not issued its own sticker any more: it carries its owner's
+ * person card, so the owner's own person row is an expected match rather than
+ * a clash. Pass the owner's id from the vehicle issue points and nowhere else
+ * — a UID held by any OTHER person is still refused, and gadgets and other
+ * vehicles are still refused outright.
+ *
  * Deliberately queries the MODELS rather than the repositories: personRepo and
  * vehicleRepo filter soft-deleted rows out, and a deleted person's UID is still
  * occupied as far as the unique index is concerned. Handing that UID to a
@@ -29,7 +36,8 @@ type Kind = 'person' | 'vehicle' | 'gadget';
  */
 export async function assertUidFree(
   uid: string,
-  self?: { kind: Kind; id: string }
+  self?: { kind: Kind; id: string },
+  ownerPersonId?: string
 ): Promise<void> {
   const skip = (kind: Kind, id: unknown) =>
     self?.kind === kind && String(id) === String(self.id);
@@ -58,7 +66,8 @@ export async function assertUidFree(
   const anyCase = new RegExp(`^${escaped}$`, 'i');
 
   const person = await PersonModel.findOne({ rfid_uid: anyCase }).select('_id').lean();
-  if (person && !skip('person', person._id)) {
+  const isOwnCard = !!person && !!ownerPersonId && String(person._id) === String(ownerPersonId);
+  if (person && !skip('person', person._id) && !isOwnCard) {
     throw new ApiError('DUPLICATE_RFID', 'That RFID is already assigned to a person');
   }
 

@@ -7,7 +7,7 @@ import { Actor, assertCanWrite } from '../../utils/authority';
 import { nextSchoolYearEnd } from '../../utils/schoolYear';
 import { personRepo } from '../persons/persons.repository';
 import { assertOwnerRegistrable } from '../persons/personStatus';
-import { vehicleService, assertWithinLimit } from '../vehicles/vehicles.service';
+import { vehicleService, assertWithinLimit, ownerCardUid } from '../vehicles/vehicles.service';
 import { vehicleRepo } from '../vehicles/vehicles.repository';
 import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
 import { assertUidFree } from '../../utils/assertUidFree';
@@ -128,20 +128,25 @@ export const vehicleApplicationService = {
     // everyday typo as a cause of application litter. The real unique indexes
     // on vehicles.rfid_uid/plate_number remain what actually prevents a
     // duplicate vehicle from ever being created.
-    await assertUidFree(input.rfid_uid);
+    // The pass carries the owner's card, so the UID comes off the owner rather
+    // than off the form. Resolved here as well as in vehicleService.create so
+    // an owner with no card is refused BEFORE the immutable application row is
+    // written — same reason as the duplicate pre-checks above.
+    const rfid_uid = ownerCardUid(owner);
+    await assertUidFree(rfid_uid, undefined, String(owner._id));
     // Pre-checked here for the same reason as DUPLICATE_RFID above: the write
     // order below is application-then-vehicle and applications are immutable,
     // so a limit breach discovered at the vehicle insert would leave an orphan
     // application nobody can edit or delete. Identical wording to the check
     // vehicleService.create runs, so a clerk sees one message, not two.
     const activeForOwner = await vehicleRepo.findActiveByOwner(owner._id, new Date());
-    assertWithinLimit(activeForOwner, input.vehicle_type, owner.full_name);
+    assertWithinLimit(activeForOwner, owner.full_name);
     // Pre-checked here too, not just in vehicleService.create below: without
     // this, a blocked UID would write the application first (paperwork
     // survives) and only fail on the vehicle insert, leaving the same kind of
     // orphan application the DUPLICATE_RFID/DUPLICATE_PLATE pre-checks above
     // already exist to avoid.
-    if (await blockedCardRepo.isBlocked(input.rfid_uid)) throw new ApiError('CARD_BLOCKED');
+    if (await blockedCardRepo.isBlocked(rfid_uid)) throw new ApiError('CARD_BLOCKED');
     const existingPlate = await vehicleRepo.findByPlate(input.plate_no);
     if (existingPlate) throw new ApiError('DUPLICATE_PLATE', 'Plate already registered');
 
@@ -171,7 +176,7 @@ export const vehicleApplicationService = {
       {
         owner_person_id: application.owner_person_id,
         plate_number: input.plate_no,
-        rfid_uid: input.rfid_uid,
+        rfid_uid,
         vehicle_type: input.vehicle_type,
         make: input.make,
         vehicle_model: input.model,

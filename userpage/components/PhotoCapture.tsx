@@ -40,6 +40,11 @@ export default function PhotoCapture({
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
+  // Which path produced the current preview. Drives whether the camera tab
+  // offers "Retake" (one click, straight back to a live preview) instead of
+  // "Turn on camera" (which would otherwise make a capture-then-remove-
+  // then-turn-on-camera sequence the only way to reshoot).
+  const [capturedFrom, setCapturedFrom] = useState<Tab | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -76,6 +81,11 @@ export default function PhotoCapture({
   // before unmount (stopCamera stops it); mountedRef additionally guards the
   // case where getUserMedia is still pending at unmount time (see startCamera).
   useEffect(() => {
+    // Set on every mount, not just declared at the ref: React's StrictMode
+    // mounts, cleans up, and mounts again in development, so a flag that is
+    // only ever cleared stays false for the rest of the component's life —
+    // and startCamera would then silently throw every stream away.
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       stopCamera();
@@ -90,11 +100,12 @@ export default function PhotoCapture({
     if (tab !== "camera") stopCamera();
   }, [tab]);
 
-  function setResult(blob: Blob | null) {
+  function setResult(blob: Blob | null, source: Tab | null = null) {
     setPreview((old) => {
       if (old) URL.revokeObjectURL(old);
       return blob ? URL.createObjectURL(blob) : null;
     });
+    setCapturedFrom(blob ? source : null);
     onChange(blob);
   }
 
@@ -104,7 +115,7 @@ export default function PhotoCapture({
     setError(null);
     try {
       const bitmap = await createImageBitmap(file);
-      setResult(await toSquareJpeg(bitmap, bitmap.width, bitmap.height));
+      setResult(await toSquareJpeg(bitmap, bitmap.width, bitmap.height), "upload");
       bitmap.close();
     } catch {
       setError("That file could not be read as an image.");
@@ -128,26 +139,43 @@ export default function PhotoCapture({
         return;
       }
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
       setCameraOn(true);
     } catch {
       setError("Camera unavailable. Check permissions, or use the Upload tab.");
     }
   }
 
+  // The <video> is only rendered once cameraOn is true, so the element does
+  // not exist yet at the moment startCamera receives the stream — attaching
+  // there would silently write to a null ref and leave a blank preview.
+  // Attach once the element has actually mounted instead.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!cameraOn || !video || !streamRef.current) return;
+    video.srcObject = streamRef.current;
+    void video.play().catch(() => setError("Could not start the preview. Try again."));
+  }, [cameraOn]);
+
   async function capture() {
     const video = videoRef.current;
     if (!video) return;
     setError(null);
     try {
-      setResult(await toSquareJpeg(video, video.videoWidth, video.videoHeight));
+      setResult(await toSquareJpeg(video, video.videoWidth, video.videoHeight), "camera");
       stopCamera();
     } catch {
       setError("Could not capture a frame. Try again.");
     }
+  }
+
+  // One click back to a live preview after a camera shot. The old preview is
+  // cleared first — not just left in place — because the preview element
+  // takes priority over the <video> in the render below, so a stale preview
+  // would otherwise keep showing the old still instead of the live feed once
+  // the camera comes back on.
+  async function retake() {
+    setResult(null);
+    await startCamera();
   }
 
   const tabCls = (active: boolean) =>
@@ -206,19 +234,28 @@ export default function PhotoCapture({
               {!cameraOn ? (
                 <button
                   type="button"
-                  onClick={startCamera}
+                  onClick={preview && capturedFrom === "camera" ? retake : startCamera}
                   className="rounded-lg border border-line bg-white px-3 py-1.5 text-[13px] font-600 text-ink-soft hover:text-navy"
                 >
-                  Turn on camera
+                  {preview && capturedFrom === "camera" ? "Retake" : "Turn on camera"}
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={capture}
-                  className="rounded-lg bg-navy px-3 py-1.5 text-[13px] font-600 text-white"
-                >
-                  Capture
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={capture}
+                    className="rounded-lg bg-navy px-3 py-1.5 text-[13px] font-600 text-white"
+                  >
+                    Capture
+                  </button>
+                  <button
+                    type="button"
+                    onClick={stopCamera}
+                    className="rounded-lg border border-line bg-white px-3 py-1.5 text-[13px] font-600 text-ink-soft hover:text-navy"
+                  >
+                    Cancel
+                  </button>
+                </>
               )}
             </div>
           )}

@@ -62,6 +62,10 @@ export const personController = {
       await personService.bulkPreview(filter, actorOf(req), status as 'active' | 'inactive')
     );
   }),
+    purgeForTesting: asyncHandler(async (req: Request, res: Response) => {
+    sendSuccess(res, await personService.purgeForTesting(req.params.id, actorOf(req)));
+  })
+  ,
   bulkSetStatus: asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(
       res,

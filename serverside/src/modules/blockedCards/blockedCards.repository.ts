@@ -21,4 +21,18 @@ export const blockedCardRepo = {
         : null,
       blocked_by: new Types.ObjectId(String(params.blocked_by)),
     }),
+
+  /**
+   * The sole exception to "rows here are never removed by application code"
+   * (see the model's own docstring, and `block`'s comment above it). Reached
+   * only from personService.purgeForTesting, which is itself refused outside
+   * a non-production environment before this is ever called — that guard is
+   * what keeps the blockedCards ruling intact for real deployments, not
+   * anything in this method.
+   *
+   * Deletes every block row for this UID, not just one — a card that was
+   * already blocked by an earlier soft-delete or card-replace in the same
+   * test run must come back fully usable, not just partially.
+   */
+  purgeByRfid: (rfid_uid: string) => BlockedCardModel.deleteMany({ rfid_uid }),
 };
