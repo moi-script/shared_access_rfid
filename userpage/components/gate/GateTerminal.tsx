@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import AuthedImage, { PersonAvatar } from "@/components/AuthedImage";
+import NcstMark from "@/components/NcstMark";
 import GateCardSkeleton from "./GateCardSkeleton";
 import GateIdleScene from "./GateIdleScene";
 import GateProvisioning from "./GateProvisioning";
@@ -607,8 +608,15 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
             changes underneath it four ways, and small text at 14px cannot clear
             4.5:1 against the yellow and orange ones. On navy it is fixed at
             11.5:1, and gold works as an accent again. */}
-        <header className="-mx-8 -mt-6 flex items-baseline justify-between bg-ink px-8 py-3 text-white">
-          <p className="font-display text-lg font-700 uppercase tracking-[0.12em]">{config.name}</p>
+        {/* items-center, not items-baseline: the seal has no text baseline to
+            sit on, and baseline alignment would hang it below the gate name. */}
+        <header className="-mx-8 -mt-6 flex items-center justify-between bg-ink px-8 py-3 text-white">
+          <div className="flex items-center gap-3">
+            <NcstMark className="h-8 w-8 shrink-0" />
+            <p className="font-display text-lg font-700 uppercase tracking-[0.12em]">
+              {config.name}
+            </p>
+          </div>
           <p className="text-sm font-600 uppercase tracking-[0.18em]">
             {meta.type} <span className="opacity-60">/</span>{" "}
             <span className="font-700 tracking-[0.24em] text-gold">{meta.direction}</span>

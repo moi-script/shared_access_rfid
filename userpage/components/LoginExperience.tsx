@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import BrandPanel from "./BrandPanel";
 import NcstMark from "./NcstMark";
+import RfidGlyph from "./RfidGlyph";
 import Notice from "./Notice";
 import { API_BASE, logout, redirectForRole, storeAuth, type AuthUser } from "@/lib/auth";
 import { MEMBER_PORTAL_ENABLED, isStaffSide } from "@/lib/permissions";
@@ -113,8 +114,11 @@ export default function LoginExperience() {
             <p className="font-display text-base font-700 tracking-tight text-ink">
               NCST
             </p>
-            <p className="text-[10px] font-500 uppercase tracking-[0.2em] text-ink-soft">
-              RFID Access
+            {/* Tighter tracking than the 0.2em of the old "RFID Access", and
+                for a sharper reason than the panel's: this row is the narrow
+                phone layout, where the full name has to clear a 320px screen. */}
+            <p className="text-[10px] font-500 uppercase tracking-[0.12em] text-ink-soft">
+              Centralized RFID System
             </p>
           </div>
         </div>
@@ -215,8 +219,10 @@ export default function LoginExperience() {
 
           {/* RFID tap hint — students & staff carry cards */}
           <div className="reveal mt-6 flex items-center gap-3 rounded-2xl border border-dashed border-coral/35 bg-coral-soft px-4 py-3.5 [animation-delay:0.3s]">
+            {/* RfidGlyph, not NcstMark: this tile means "tap your card", and the
+                seal is an unreadable blob at 24px anyway. */}
             <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-navy text-gold">
-              <NcstMark className="h-6 w-6" />
+              <RfidGlyph className="h-6 w-6" />
             </div>
             <p className="text-[13px] leading-snug text-ink-soft">
               On campus? Just{" "}

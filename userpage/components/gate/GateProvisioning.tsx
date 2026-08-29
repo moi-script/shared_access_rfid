@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { API_BASE } from "@/lib/auth";
 import Notice from "@/components/Notice";
+import NcstMark from "@/components/NcstMark";
 import {
   GATE_ROUTES,
   mintGateKey,
@@ -119,6 +120,7 @@ export default function GateProvisioning({
         className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-8"
       >
         <div>
+          <NcstMark className="mb-3 h-10 w-10" />
           <p className="text-[11px] font-600 uppercase tracking-[0.18em] text-ink-soft">
             Gate terminal
           </p>
