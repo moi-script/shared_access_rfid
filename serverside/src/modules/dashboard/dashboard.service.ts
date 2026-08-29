@@ -320,6 +320,26 @@ export const dashboardService = {
       if (row._id in attendance_summary) attendance_summary[row._id] = row.count;
     }
 
+    // Which of this person's devices are on campus right now.
+    //
+    // Deliberately the SAME call the gate makes when it builds gadgets_inside
+    // for an exit tap (scan.service.ts) — same repository method, same
+    // lastResetBoundary rule. The profile and the terminal must never disagree
+    // about what someone is carrying, and the way that goes wrong is a second
+    // definition of "inside" written independently here. There is exactly one,
+    // and both callers use it.
+    //
+    // No new write path and nothing on the tap hot path: this reads occupancy
+    // rows the gadget taps already wrote.
+    const insideGadgetIds = new Set(
+      (
+        await occupancyRepo.listInsideGadgetIds(
+          gadgets.map((g) => g._id),
+          lastResetBoundary(new Date())
+        )
+      ).map(String)
+    );
+
     return {
       person: person
         ? {
@@ -360,6 +380,11 @@ export const dashboardService = {
         // optional), so the profile has to distinguish "no tag yet" from a tag
         // it simply failed to send.
         rfid_uid: gadget.rfid_uid ?? null,
+        // On campus right now, by the same rule the exit terminal applies.
+        // An untagged device can never be true here: nothing ever tapped it
+        // in, so it holds no occupancy row — which is precisely why the UI
+        // excludes those from the carry count rather than reporting them out.
+        inside: insideGadgetIds.has(String(gadget._id)),
         status: gadget.status,
       })),
       recent_scans: scans,

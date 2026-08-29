@@ -401,6 +401,85 @@ async function main(): Promise<void> {
       const delCase = await request(superadmin, 'DELETE', `/persons/${caseProbeId}`);
       expectEqual('lowercase-UID probe cleaned up', delCase.status, OK);
     }
+
+    console.log('\n--- the profile and the gate agree on what is being carried');
+
+    // The risk this guards is not "does the flag serialize" — it is DRIFT. The
+    // profile's `inside` and the terminal's gadgets_inside are two readers of
+    // one fact, and if they ever stop agreeing the console will contradict the
+    // guard standing at the barrier. So both are read at the same moments and
+    // compared against each other, not against a hardcoded expectation.
+    const profileOf = async () => {
+      const r = await request(superadmin, 'GET', `/persons/${personId}/overview`);
+      const rows = (r.json.data as { gadgets?: { id: string; inside: boolean; rfid_uid: string | null }[] })
+        ?.gadgets ?? [];
+      return rows;
+    };
+
+    // Nothing is inside at this point — every earlier block tapped its devices
+    // back out, so this establishes the floor the next tap moves off.
+    const before = await profileOf();
+    expectEqual(
+      'profile starts with no device inside',
+      before.filter((g) => g.inside).length,
+      0
+    );
+
+    // hex(7), NOT hex(2): the sticker swap earlier in this script retired
+    // hex(2) and put it on the blocklist, so a tap with it is denied and moves
+    // no occupancy at all. Using it here made every assertion below compare
+    // two empty sets and pass for the wrong reason.
+    await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(7), gate_id: gadgetLane!._id, direction: 'entry',
+    });
+
+    const during = await profileOf();
+    expectEqual(
+      'profile reports exactly one device inside after it taps in',
+      during.filter((g) => g.inside).length,
+      1
+    );
+    expectEqual(
+      'and it is the device that tapped, not merely some device',
+      during.find((g) => g.inside)?.id,
+      gadgetId
+    );
+    // An untagged device must never count as inside: it holds no occupancy row
+    // because nothing ever tapped it, which is why the UI leaves it out of the
+    // carry count rather than reporting it as returned.
+    expectEqual(
+      'an untagged device is never reported inside',
+      during.filter((g) => !g.rfid_uid && g.inside).length,
+      0
+    );
+
+    // The agreement check: the person's own exit tap computes gadgets_inside
+    // server-side, independently of the profile query above.
+    const agreeExit = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(1), gate_id: sideGate!._id, direction: 'exit',
+    });
+    const gateSays = (agreeExit.json.data as { person?: { gadgets_inside?: { id: string }[] } })
+      ?.person?.gadgets_inside ?? [];
+    // Guarded against the empty-set trap: two sides that agree on "nothing"
+    // agree for free, and that is exactly how this check passed while the tap
+    // above was silently being denied. The comparison is only meaningful when
+    // there is something to compare.
+    expectEqual('the gate reports something inside to compare', gateSays.length > 0, true);
+    expectEqual(
+      'the gate and the profile name the SAME devices inside',
+      gateSays.map((g) => g.id).sort().join(','),
+      during.filter((g) => g.inside).map((g) => g.id).sort().join(',')
+    );
+
+    await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(7), gate_id: sideGate!._id, direction: 'exit',
+    });
+    const after = await profileOf();
+    expectEqual(
+      'profile drops back to nothing inside once the device is returned',
+      after.filter((g) => g.inside).length,
+      0
+    );
   } finally {
     console.log('\n--- cleanup');
     if (personId) {

@@ -63,6 +63,8 @@ export interface PersonOverview {
     /** Nullable, unlike a vehicle's: a device can be registered before its
      *  sticker arrives, and is then carried with no tag of its own. */
     rfid_uid: string | null;
+    /** On campus right now, by the same rule the exit terminal applies. */
+    inside: boolean;
     status: string;
   }[];
   recent_scans: ScanRow[];
@@ -223,6 +225,26 @@ export default function ProfileView({
 
         <section className="rounded-2xl border border-line bg-white p-5">
           <SectionHeading icon={TfiDesktop}>Registered devices</SectionHeading>
+          {/* What this person is carrying right now.
+              Counted against TAGGED devices only, not every registered one: an
+              untagged device has never tapped a reader, so it holds no
+              occupancy row and can never be reported inside. Counting it in the
+              denominator would read as "1 of 3 devices" for someone who is
+              carrying everything they can actually be tracked with. */}
+          {(() => {
+            const tagged = (data.gadgets ?? []).filter((g) => g.rfid_uid);
+            const inside = tagged.filter((g) => g.inside).length;
+            if (tagged.length === 0) return null;
+            return (
+              <p className="mt-2 text-[13px] text-ink-soft">
+                Carrying{" "}
+                <span className="font-700 text-ink">
+                  {inside} of {tagged.length}
+                </span>{" "}
+                tagged {tagged.length === 1 ? "device" : "devices"}
+              </p>
+            );
+          })()}
           {(data.gadgets ?? []).length > 0 ? (
             <ul className="mt-3 space-y-3">
               {(data.gadgets ?? []).map((g, i) => (
@@ -233,14 +255,25 @@ export default function ProfileView({
                   <div className="space-y-2 text-[15px]">
                     <div className="flex items-center justify-between">
                       <span className="font-mono font-700 text-ink">{g.serial_number}</span>
-                      <span
-                        className={`rounded-lg px-2.5 py-1 text-[12px] font-600 capitalize ${
-                          g.status === "active"
-                            ? "border border-blue bg-blue/25 text-ink"
-                            : "border border-red bg-red/25 text-ink"
-                        }`}
-                      >
-                        {g.status}
+                      <span className="flex items-center gap-1.5">
+                        {/* Gold, the same accent the gate terminal uses for a
+                            device it is still waiting on. Shown only when true:
+                            an "Outside" badge on every device most of the time
+                            would be noise on the common case. */}
+                        {g.inside && (
+                          <span className="rounded-lg border border-gold bg-gold/25 px-2.5 py-1 text-[12px] font-600 text-ink">
+                            Inside
+                          </span>
+                        )}
+                        <span
+                          className={`rounded-lg px-2.5 py-1 text-[12px] font-600 capitalize ${
+                            g.status === "active"
+                              ? "border border-blue bg-blue/25 text-ink"
+                              : "border border-red bg-red/25 text-ink"
+                          }`}
+                        >
+                          {g.status}
+                        </span>
                       </span>
                     </div>
                     <p className="text-ink-soft">
