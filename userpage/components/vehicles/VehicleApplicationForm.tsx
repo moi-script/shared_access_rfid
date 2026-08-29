@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiGet, apiGetBlob, apiGetList, apiPost, apiUpload } from "@/lib/auth";
 import PhotoCapture from "@/components/PhotoCapture";
-import { VEHICLE_TYPES, VEHICLE_LIMITS } from "@/lib/vehicleTypes";
+import { VEHICLE_TYPES } from "@/lib/vehicleTypes";
 import Notice from "@/components/Notice";
 import type { IconType } from "react-icons";
 import {
@@ -35,6 +35,10 @@ interface OwnerHit {
   // The only contact detail the Person record carries. School year and mobile
   // number are NOT on it; they come from a prior application. See lookup().
   contact_email?: string;
+  // The card the pass is issued under — a vehicle has no sticker of its own.
+  // Absent for a person who has not been issued a card yet, which is exactly
+  // the case the RFID field below refuses to submit on.
+  rfid_uid?: string;
 }
 
 /** The fields a previous application can supply that the Person record cannot. */
@@ -343,6 +347,10 @@ export default function VehicleApplicationForm({
             ...f,
             registered_owner_name: hit.full_name,
             email: f.email.trim() ? f.email : (hit.contact_email ?? ""),
+            // Derived, never typed — see the RFID field below. The server
+            // reads it off the owner too and ignores what we send, so this is
+            // for the clerk to SEE which card the pass will use.
+            rfid_uid: hit.rfid_uid ?? "",
           }));
 
           // Hop 2 carries its OWN catch rather than sharing the outer one.
@@ -630,9 +638,7 @@ export default function VehicleApplicationForm({
               ))}
             </select>
             <span className="mt-1 block text-[12px] font-400 text-ink-soft">
-              {Number.isFinite(VEHICLE_LIMITS[form.vehicle_type])
-                ? `Limit: ${VEHICLE_LIMITS[form.vehicle_type]} active per person`
-                : "No limit per person"}
+              Limit: one active vehicle per person
             </span>
           </label>
         </div>
@@ -659,6 +665,7 @@ export default function VehicleApplicationForm({
                   ...f,
                   id_number: e.target.value,
                   registered_owner_name: "",
+                  rfid_uid: "",
                 }));
               }}
               placeholder="e.g. 2025-0001"
@@ -815,16 +822,27 @@ export default function VehicleApplicationForm({
               className={`mt-1 font-mono ${inputCls}`}
             />
           </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            RFID UID (hex) — scan the sticker&apos;s card now
-            <input
-              required
-              value={form.rfid_uid}
-              onChange={(e) => set("rfid_uid", e.target.value)}
-              placeholder="e.g. A3F19C24"
-              className={`mt-1 font-mono ${inputCls}`}
-            />
-          </label>
+          <div className="block text-[13px] font-600 text-ink-soft">
+            RFID UID — the owner&apos;s own card
+            {/* Read-only and derived from the resolved applicant: a vehicle is
+                not issued a sticker of its own any more, so there is nothing
+                to scan here. The barrier identifies the vehicle by the owner
+                tapping their card, which is also why one person may hold only
+                one active pass (vehicles.service.assertWithinLimit). */}
+            <div
+              className={`mt-1 flex min-h-[42px] items-center rounded-xl border border-line px-3 py-2 font-mono text-[14px] ${
+                form.rfid_uid ? "bg-paper text-ink" : "bg-paper/50 text-ink-soft"
+              }`}
+            >
+              {form.rfid_uid || (owner ? "No card on file" : "Fills in from the ID number")}
+            </div>
+            {owner && !form.rfid_uid && (
+              <span className="mt-1 block font-sans text-[12px] font-400 text-ink">
+                {owner.full_name} has no RFID card yet. Issue them one in the directory first — a
+                vehicle pass uses the owner&apos;s card.
+              </span>
+            )}
+          </div>
 
           <div className="block text-[13px] font-600 text-ink-soft sm:col-span-2">
             Vehicle photo — shown to the guard at the barrier

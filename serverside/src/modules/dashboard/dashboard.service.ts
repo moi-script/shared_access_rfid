@@ -369,6 +369,11 @@ export const dashboardService = {
         vehicle_model: vehicle.vehicle_model ?? null,
         rfid_uid: vehicle.rfid_uid,
         status: vehicle.status,
+        // NEW: lets PersonProfile/ProfileView render the vehicle's photo via
+        // the existing authenticated GET /vehicles/:id/photo route — the same
+        // route VehicleEditForm already uploads to. Nullable because a vehicle
+        // can exist with no photo captured yet.
+        photo_url: vehicle.photo_url ?? null,
       })),
       gadgets: gadgets.map((gadget) => ({
         id: String(gadget._id),
@@ -386,6 +391,9 @@ export const dashboardService = {
         // excludes those from the carry count rather than reporting them out.
         inside: insideGadgetIds.has(String(gadget._id)),
         status: gadget.status,
+        // NEW: mirrors the vehicle field above, via GET /gadgets/:id/photo
+        // (already the target of GadgetEditForm's photo upload).
+        photo_url: gadget.photo_url ?? null,
       })),
       recent_scans: scans,
     };

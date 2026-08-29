@@ -22,9 +22,8 @@ export const vehicleController = {
   setStatus: asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(res, await vehicleService.setStatus(req.params.id, req.body.status, actorOf(req)));
   }),
-
-  reassignRfid: asyncHandler(async (req: Request, res: Response) => {
-    sendSuccess(res, await vehicleService.reassignRfid(req.params.id, req.body.rfid_uid, actorOf(req)));
+  bulkSetStatus: asyncHandler(async (req: Request, res: Response) => {
+    sendSuccess(res, await vehicleService.bulkSetStatus(req.body.status, actorOf(req)));
   }),
 
   uploadPhoto: asyncHandler(async (req: Request, res: Response) => {

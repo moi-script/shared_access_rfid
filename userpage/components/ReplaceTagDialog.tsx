@@ -8,7 +8,7 @@ interface ApiErrorLike extends Error {
   code?: string;
 }
 
-export type TagKind = "vehicle" | "gadget";
+export type TagKind = "gadget";
 
 /**
  * Assigns or replaces the RFID sticker on a VEHICLE or a GADGET.
@@ -21,7 +21,7 @@ export type TagKind = "vehicle" | "gadget";
  * are the difference between an operator looking for a sticker to peel off and
  * one who knows there is nothing there yet.
  *
- * Both /vehicles/:id/rfid and /gadgets/:id/rfid take the same body and enforce
+ * /gadgets/:id/rfid takes this body and enforces
  * the same three rules server-side — hex format, the three-way UID namespace,
  * and the blocklist — so the only thing that varies here is the path and the
  * noun. Server error messages are shown verbatim: DUPLICATE_RFID names which
@@ -47,7 +47,7 @@ export default function ReplaceTagDialog({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const noun = kind === "vehicle" ? "vehicle" : "device";
+  const noun = "device";
   const assigning = !currentUid;
   const title = assigning ? "Assign RFID tag" : "Replace RFID tag";
 

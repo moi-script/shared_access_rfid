@@ -33,14 +33,14 @@ export const updateVehicleSchema = createVehicleSchema.partial();
 export const vehicleStatusSchema = z.object({ status: z.enum(['active', 'inactive']) });
 
 /**
- * A dedicated schema for the sticker swap, matching reassignGadgetRfidSchema.
- * Separate from updateVehicleSchema because this endpoint does one thing and
- * must not accept a drive-by edit to the plate or the owner alongside it.
+ * The whole-fleet switch-off. Deliberately accepts ONLY 'inactive'.
+ *
+ * There is no bulk activate twin (accounts have one): a blanket updateMany
+ * cannot run the per-owner check that vehicleService.update runs, so
+ * re-arming every pass at once would hand any owner with two rows two active
+ * passes — the state the one-active-vehicle-per-person rule exists to
+ * prevent, since a pass is keyed on the owner's card. Re-activation stays on
+ * the per-row toggle, which goes through update() and gets that check.
  */
-export const reassignVehicleRfidSchema = z.object({
-  // Uppercased like every other rfid_uid — see createVehicleSchema's note.
-  rfid_uid: z
-    .string()
-    .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
-    .transform((v) => v.toUpperCase()),
-});
+export const bulkVehicleStatusSchema = z.object({ status: z.literal('inactive') });
+

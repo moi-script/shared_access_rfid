@@ -9,7 +9,7 @@ import {
   TfiTime,
   TfiTimer,
 } from "react-icons/tfi";
-import { PersonAvatar } from "@/components/AuthedImage";
+import AuthedImage, { PersonAvatar } from "@/components/AuthedImage";
 import Notice from "@/components/Notice";
 import SectionHeading from "@/components/SectionHeading";
 import StatTile from "@/components/StatTile";
@@ -51,6 +51,11 @@ export interface PersonOverview {
     vehicle_model: string | null;
     rfid_uid: string;
     status: string;
+    /** Present once a vehicle photo has been uploaded (VehicleEditForm /
+     *  VehicleApplicationForm). Fetched from GET /vehicles/:id/photo, which
+     *  requires auth — this field is only used as a flag to decide whether
+     *  that request is worth making at all. */
+    photo_url?: string | null;
   }[];
   gadgets: {
     // GadgetType, not string: gadgetTypeLabel() is typed to the union, and the
@@ -66,8 +71,27 @@ export interface PersonOverview {
     /** On campus right now, by the same rule the exit terminal applies. */
     inside: boolean;
     status: string;
+    /** Present once a gadget photo has been uploaded (GadgetEditForm /
+     *  GadgetForm). Fetched from GET /gadgets/:id/photo — same flag role as
+     *  the vehicle field above. */
+    photo_url?: string | null;
   }[];
   recent_scans: ScanRow[];
+}
+
+/** What VehicleEditForm needs to prefill, minus the id (passed separately). */
+interface VehicleEditSeed {
+  plate_number: string;
+  vehicle_type: string;
+  vehicle_model: string | null;
+  rfid_uid: string;
+}
+
+/** What GadgetEditForm needs to prefill, minus the id (passed separately). */
+interface GadgetEditSeed {
+  gadget_type: GadgetType;
+  brand_model: string;
+  serial_number: string;
 }
 
 function fmtTime(iso: string | null): string {
@@ -88,20 +112,87 @@ const statusStyle: Record<string, string> = {
   absent: "border border-red bg-red/25 text-ink",
 };
 
+/**
+ * Small fixed-size thumbnail shared by the vehicle and gadget cards below.
+ * Only calls AuthedImage (an authenticated fetch) when `photoUrl` is
+ * present — a vehicle/gadget with no photo on file falls straight to the
+ * icon instead of firing a request that will only 404, mirroring how
+ * PersonAvatar/classifyPhotoUrl decide whether to fetch at all.
+ */
+function EntityThumb({
+  path,
+  photoUrl,
+  alt,
+  icon: Icon,
+}: {
+  path: string;
+  photoUrl?: string | null;
+  alt: string;
+  icon: typeof TfiCar;
+}) {
+  return (
+    <div className="grid h-16 w-24 shrink-0 place-items-center overflow-hidden rounded-lg border border-line bg-paper text-ink-soft">
+      {photoUrl ? (
+        <AuthedImage
+          path={path}
+          alt={alt}
+          className="h-full w-full object-cover"
+          fallback={<Icon aria-hidden className="h-6 w-6" />}
+        />
+      ) : (
+        <Icon aria-hidden className="h-6 w-6" />
+      )}
+    </div>
+  );
+}
+
 /** Full person profile: identity, attendance, vehicle, recent activity.
  * Used both by a student's own dashboard and by the admin's per-person view. */
 export default function ProfileView({
   data,
   onReplaceTag,
+  onEditVehicle,
+  onEditGadget,
 }: {
-  data: PersonOverview;
+  /**
+   * Optional/nullable on purpose, even though every intended caller (e.g.
+   * PersonProfile) already guards with `{data && <ProfileView .../>}`: this
+   * component has at least one other render path (seen via AdminShell in
+   * production) that mounts it before its fetch resolves. Rather than rely
+   * on every current and future caller getting that guard right, ProfileView
+   * renders its own loading state when `data` isn't there yet instead of
+   * throwing on `data.person`.
+   */
+  data?: PersonOverview | null;
   /**
    * Supplied only by the admin directory (PersonProfile). Absent on a student's
    * own dashboard, which renders this same component — so the buttons are gated
    * by whether the caller can act at all, not by a role check repeated here.
    */
-  onReplaceTag?: (kind: "vehicle" | "gadget", id: string, label: string, currentUid: string | null) => void;
+  onReplaceTag?: (kind: "gadget", id: string, label: string, currentUid: string | null) => void;
+  /**
+   * Opens VehicleEditForm for the given row. Not gated on gadget write
+   * authority — vehicle writes are a separate domain — so PersonProfile
+   * passes this unconditionally; the server's assertCanWrite('vehicle') is
+   * the real check, this only decides whether the button renders.
+   */
+  onEditVehicle?: (id: string, current: VehicleEditSeed) => void;
+  /**
+   * Opens GadgetEditForm for the given row. Passed only when this operator
+   * may write to the gadget domain, mirroring onReplaceTag above.
+   */
+  onEditGadget?: (id: string, current: GadgetEditSeed) => void;
 }) {
+  // See the `data` prop comment above: this is the fallback for a caller
+  // that mounts ProfileView before its overview fetch has resolved.
+  if (!data) {
+    return (
+      <div className="rounded-2xl border border-line bg-white p-6 text-[15px] text-ink-soft">
+        Loading profile…
+      </div>
+    );
+  }
+
   const p = data.person;
   const kindLabel = p?.type === "student" ? "Student" : p?.type === "staff" ? "Staff" : "Member";
 
@@ -189,29 +280,50 @@ export default function ProfileView({
                   key={`${v.plate_number}-${i}`}
                   className={i > 0 ? "border-t border-line/60 pt-3" : ""}
                 >
-                  <div className="space-y-2 text-[15px]">
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono font-700 text-ink">{v.plate_number}</span>
-                      <span className="rounded-lg border border-blue bg-blue/25 px-2.5 py-1 text-[12px] font-600 capitalize text-ink">
-                        {v.status}
-                      </span>
-                    </div>
-                    <p className="text-ink-soft">
-                      {v.vehicle_type}
-                      {v.vehicle_model ? ` · ${v.vehicle_model}` : ""}
-                    </p>
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-mono text-[12px] text-ink-soft">{v.rfid_uid}</p>
-                      {onReplaceTag && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onReplaceTag("vehicle", v.id, v.plate_number, v.rfid_uid)
-                          }
-                          className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-[12px] font-600 text-ink-soft hover:border-navy hover:text-ink"
-                        >
-                          Replace tag
-                        </button>
+                  <div className="flex gap-3">
+                    <EntityThumb
+                      path={`/vehicles/${v.id}/photo`}
+                      photoUrl={v.photo_url}
+                      alt={`${v.plate_number} photo`}
+                      icon={TfiCar}
+                    />
+                    <div className="min-w-0 flex-1 space-y-2 text-[15px]">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono font-700 text-ink">{v.plate_number}</span>
+                        <span className="rounded-lg border border-blue bg-blue/25 px-2.5 py-1 text-[12px] font-600 capitalize text-ink">
+                          {v.status}
+                        </span>
+                      </div>
+                      <p className="text-ink-soft">
+                        {v.vehicle_type}
+                        {v.vehicle_model ? ` · ${v.vehicle_model}` : ""}
+                      </p>
+                      {/* No "Replace tag" here, unlike the device card below: a
+                          vehicle pass carries its OWNER'S card rather than a
+                          sticker of its own, so the only way to change this UID
+                          is to replace the person's card — which carries onto
+                          the vehicle automatically (persons.service.reassignRfid). */}
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-mono text-[12px] text-ink-soft">{v.rfid_uid}</p>
+                        <span className="shrink-0 text-[12px] text-ink-soft">Owner&apos;s card</span>
+                      </div>
+                      {onEditVehicle && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onEditVehicle(v.id, {
+                                plate_number: v.plate_number,
+                                vehicle_type: v.vehicle_type,
+                                vehicle_model: v.vehicle_model,
+                                rfid_uid: v.rfid_uid,
+                              })
+                            }
+                            className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-[12px] font-600 text-ink-soft hover:border-navy hover:text-ink"
+                          >
+                            Edit
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -252,55 +364,80 @@ export default function ProfileView({
                   key={`${g.serial_number}-${i}`}
                   className={i > 0 ? "border-t border-line/60 pt-3" : ""}
                 >
-                  <div className="space-y-2 text-[15px]">
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono font-700 text-ink">{g.serial_number}</span>
-                      <span className="flex items-center gap-1.5">
-                        {/* Gold, the same accent the gate terminal uses for a
-                            device it is still waiting on. Shown only when true:
-                            an "Outside" badge on every device most of the time
-                            would be noise on the common case. */}
-                        {g.inside && (
-                          <span className="rounded-lg border border-gold bg-gold/25 px-2.5 py-1 text-[12px] font-600 text-ink">
-                            Inside
+                  <div className="flex gap-3">
+                    <EntityThumb
+                      path={`/gadgets/${g.id}/photo`}
+                      photoUrl={g.photo_url}
+                      alt={`${g.brand_model} photo`}
+                      icon={TfiDesktop}
+                    />
+                    <div className="min-w-0 flex-1 space-y-2 text-[15px]">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono font-700 text-ink">{g.serial_number}</span>
+                        <span className="flex items-center gap-1.5">
+                          {/* Gold, the same accent the gate terminal uses for a
+                              device it is still waiting on. Shown only when true:
+                              an "Outside" badge on every device most of the time
+                              would be noise on the common case. */}
+                          {g.inside && (
+                            <span className="rounded-lg border border-gold bg-gold/25 px-2.5 py-1 text-[12px] font-600 text-ink">
+                              Inside
+                            </span>
+                          )}
+                          <span
+                            className={`rounded-lg px-2.5 py-1 text-[12px] font-600 capitalize ${
+                              g.status === "active"
+                                ? "border border-blue bg-blue/25 text-ink"
+                                : "border border-red bg-red/25 text-ink"
+                            }`}
+                          >
+                            {g.status}
                           </span>
-                        )}
-                        <span
-                          className={`rounded-lg px-2.5 py-1 text-[12px] font-600 capitalize ${
-                            g.status === "active"
-                              ? "border border-blue bg-blue/25 text-ink"
-                              : "border border-red bg-red/25 text-ink"
-                          }`}
-                        >
-                          {g.status}
                         </span>
-                      </span>
-                    </div>
-                    <p className="text-ink-soft">
-                      {gadgetTypeLabel(g.gadget_type)} · {g.brand_model}
-                    </p>
-                    {/* The device's own tag, mirroring the vehicle row above.
-                        Spelled out when absent rather than left blank: an empty
-                        slot reads as "the screen did not load it", and "no
-                        sticker yet" is a real state someone acts on — it is the
-                        device that will not appear on any gate checklist. */}
-                    <div className="flex items-center justify-between gap-2">
-                      {g.rfid_uid ? (
-                        <p className="font-mono text-[12px] text-ink-soft">{g.rfid_uid}</p>
-                      ) : (
-                        <p className="text-[12px] italic text-ink-soft">No RFID sticker yet</p>
-                      )}
-                      {onReplaceTag && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onReplaceTag("gadget", g.id, g.brand_model, g.rfid_uid)
-                          }
-                          className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-[12px] font-600 text-ink-soft hover:border-navy hover:text-ink"
-                        >
-                          {g.rfid_uid ? "Replace tag" : "Assign tag"}
-                        </button>
-                      )}
+                      </div>
+                      <p className="text-ink-soft">
+                        {gadgetTypeLabel(g.gadget_type)} · {g.brand_model}
+                      </p>
+                      {/* The device's own tag, mirroring the vehicle row above.
+                          Spelled out when absent rather than left blank: an empty
+                          slot reads as "the screen did not load it", and "no
+                          sticker yet" is a real state someone acts on — it is the
+                          device that will not appear on any gate checklist. */}
+                      <div className="flex items-center justify-between gap-2">
+                        {g.rfid_uid ? (
+                          <p className="font-mono text-[12px] text-ink-soft">{g.rfid_uid}</p>
+                        ) : (
+                          <p className="text-[12px] italic text-ink-soft">No RFID sticker yet</p>
+                        )}
+                        <span className="flex shrink-0 items-center gap-2">
+                          {onEditGadget && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onEditGadget(g.id, {
+                                  gadget_type: g.gadget_type,
+                                  brand_model: g.brand_model,
+                                  serial_number: g.serial_number,
+                                })
+                              }
+                              className="rounded-lg border border-line px-2.5 py-1 text-[12px] font-600 text-ink-soft hover:border-navy hover:text-ink"
+                            >
+                              Edit
+                            </button>
+                          )}
+                          {onReplaceTag && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onReplaceTag("gadget", g.id, g.brand_model, g.rfid_uid)
+                              }
+                              className="rounded-lg border border-line px-2.5 py-1 text-[12px] font-600 text-ink-soft hover:border-navy hover:text-ink"
+                            >
+                              {g.rfid_uid ? "Replace tag" : "Assign tag"}
+                            </button>
+                          )}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </li>

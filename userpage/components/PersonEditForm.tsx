@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { apiPatch, getStoredUser, type Role } from "@/lib/auth";
+import { apiPatch, apiUpload, getStoredUser, type Role } from "@/lib/auth";
 import { personTypesFor } from "@/lib/permissions";
+import PhotoCapture from "@/components/PhotoCapture";
 import Notice from "@/components/Notice";
 
 export interface EditablePerson {
@@ -12,6 +13,9 @@ export interface EditablePerson {
   id_number: string;
   department_section: string | null;
   contact_email: string | null;
+  // Not read by this form (there is nothing to preview it with here), only
+  // carried through so callers that already have it don't need a second type.
+  photo_url?: string | null;
 }
 
 const inputCls =
@@ -47,6 +51,10 @@ export default function PersonEditForm({
   });
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // A fresh capture to replace the person's photo, or null to leave the
+  // current one (if any) untouched. Uploaded only after the field PATCH
+  // succeeds — see submit().
+  const [photo, setPhoto] = useState<Blob | null>(null);
 
   function set(k: keyof typeof form, v: string) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -74,6 +82,28 @@ export default function PersonEditForm({
     payload.department_section = form.department_section.trim();
     try {
       const updated = await apiPatch<EditablePerson>(`/persons/${person._id}`, payload);
+      if (photo) {
+        try {
+          const fd = new FormData();
+          fd.append("photo", photo, "photo.jpg");
+          const uploaded = await apiUpload<{ photo_url: string }>(
+            `/persons/${person._id}/photo`,
+            fd
+          );
+          updated.photo_url = uploaded.photo_url;
+        } catch (photoErr) {
+          // The field edits are already saved — do not lose them behind a
+          // failed upload. Left open (saving reset, dialog not closed) so
+          // re-submitting just re-PATCHes the same values and retries the
+          // photo; the PATCH is idempotent.
+          setError(
+            `Saved, but the photo didn't upload: ${(photoErr as Error).message}. ` +
+              "Click Save changes to retry the photo."
+          );
+          setSaving(false);
+          return;
+        }
+      }
       onSaved(updated);
     } catch (err) {
       setError((err as Error).message);
@@ -176,6 +206,13 @@ export default function PersonEditForm({
             className={`mt-1 ${inputCls}`}
           />
         </label>
+
+        <div>
+          <p className="mb-1 text-[13px] font-600 text-ink-soft">
+            Photo — leave blank to keep the current one
+          </p>
+          <PhotoCapture onChange={setPhoto} />
+        </div>
 
         <button
           type="submit"

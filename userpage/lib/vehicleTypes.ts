@@ -15,16 +15,3 @@ export const VEHICLE_TYPES = [
 
 export type VehicleType = (typeof VEHICLE_TYPES)[number];
 
-/** Per-person allowance, counted over active and unexpired vehicles only. */
-export const VEHICLE_LIMITS: Record<VehicleType, number> = {
-  motorcycle: 1,
-  multicab: 3,
-  van: 3,
-  pickup: 3,
-  auv: 1,
-  truck: 1,
-  // Uncapped by decision — mirrors the server, where assertWithinLimit's
-  // `used >= limit` can never be true for Infinity. See the fuller note in
-  // serverside/src/constants/vehicleTypes.ts before changing this.
-  car: Number.POSITIVE_INFINITY,
-};

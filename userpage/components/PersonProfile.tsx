@@ -7,8 +7,13 @@ import RegistrationForm, { type PersonRecord } from "@/components/RegistrationFo
 // Unused while the profile's Delete button is commented out; the component file
 // itself is left in place.
 // import DeletePersonDialog from "@/components/DeletePersonDialog";
+import PurgePersonDialog from "@/components/PurgePersonDialog";
 import GadgetForm from "@/components/gadgets/GadgetForm";
-import { canRegisterGadgets, canRegisterVehicles } from "@/lib/permissions";
+import GadgetEditForm, { type EditableGadget } from "@/components/gadgets/GadgetEditForm";
+import VehicleEditForm, { type EditableVehicle } from "@/components/vehicles/VehicleEditForm";
+import PersonEditForm, { type EditablePerson } from "@/components/PersonEditForm";
+import ReplaceCardDialog from "@/components/ReplaceCardDialog";
+import { canRegisterGadgets } from "@/lib/permissions";
 import ReplaceTagDialog, { type TagKind } from "@/components/ReplaceTagDialog";
 import type { Role } from "@/lib/auth";
 
@@ -32,9 +37,29 @@ export default function PersonProfile({
   // // regardless (personRoutes.delete is authorize(ROLES.SUPERADMIN)).
   // const isSuperadmin = getStoredUser()?.role === "superadmin";
   const [showGadget, setShowGadget] = useState(false);
+  // Editing the person's own fields (name, type, department, email, photo) and
+  // replacing their card — the same two entry points StudentsDirectory already
+  // offers per row, added here so a profile visit doesn't require a trip back
+  // to the directory just to fix a typo. Unconditional like Print form above:
+  // the server is what actually enforces write authority (assertCanWrite on
+  // both the current and incoming type for edits), this is only a usability
+  // layer, matching PersonEditForm's own header comment.
+  const [showEdit, setShowEdit] = useState(false);
+  const [showCard, setShowCard] = useState(false);
+  // The gadget/vehicle row being edited, or null. Holds the current field
+  // values (not just an id) so the edit dialog can prefill without a second
+  // fetch — mirrors tagTarget below.
+  const [editGadget, setEditGadget] = useState<EditableGadget | null>(null);
+  const [editVehicle, setEditVehicle] = useState<EditableVehicle | null>(null);
+  const [showPurge, setShowPurge] = useState(false);
   const myRole = (getStoredUser()?.role ?? "staff") as Role;
   const canGadget = canRegisterGadgets(myRole);
-  const canVehicle = canRegisterVehicles(myRole);
+  // Purge is superadmin-only in the UI; the server enforces this regardless
+  // (personRoutes.delete('/:id/purge', authorize(ROLES.SUPERADMIN)) and, on
+  // top of that, refuses outside a non-production environment). This is a
+  // separate flag from the commented-out Delete button's isSuperadmin above,
+  // kept live because purge is a live, independent feature.
+  const isSuperadmin = myRole === "superadmin";
   // The row whose sticker is being swapped, or null. Holds the whole target
   // rather than an id: the dialog shows the plate/model and the current tag,
   // and re-deriving those from `data` after a refresh would race the reload.
@@ -81,6 +106,18 @@ export default function PersonProfile({
         {record && (
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setShowEdit(true)}
+              className="rounded-xl border border-line bg-white px-3 py-1.5 text-[13px] font-600 text-ink-soft hover:text-ink"
+            >
+              Edit
+            </button>
+            <button
+              onClick={() => setShowCard(true)}
+              className="rounded-xl border border-line bg-white px-3 py-1.5 text-[13px] font-600 text-ink-soft hover:text-ink"
+            >
+              Replace card
+            </button>
+            <button
               onClick={() => setShowForm(true)}
               className="rounded-xl border border-line bg-white px-3 py-1.5 text-[13px] font-600 text-ink-soft hover:text-ink"
             >
@@ -104,6 +141,19 @@ export default function PersonProfile({
               </button>
             )}
             */}
+            {/* Purge — testing-only hard delete, separate from Delete above.
+                See PurgePersonDialog's own header comment. Live (not
+                commented out): unlike Delete this was never removed by
+                request, and the server's own environment check is the real
+                gate against it reaching production regardless of this UI. */}
+            {isSuperadmin && (
+              <button
+                onClick={() => setShowPurge(true)}
+                className="rounded-xl border-2 border-red bg-white px-3 py-1.5 text-[13px] font-600 text-ink hover:bg-red/25 hover:text-ink"
+              >
+                Erase (test data)
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -118,14 +168,18 @@ export default function PersonProfile({
           // on a student's own dashboard — it renders ProfileView with no
           // callback at all. The API enforces the real boundary either way.
           onReplaceTag={
-            canVehicle || canGadget
-              ? (kind, id, label, currentUid) => {
-                  if (kind === "vehicle" && !canVehicle) return;
-                  if (kind === "gadget" && !canGadget) return;
-                  setTagTarget({ kind, id, label, currentUid });
-                }
+            canGadget
+              ? (kind, id, label, currentUid) => setTagTarget({ kind, id, label, currentUid  })
               : undefined
           }
+          onEditGadget={
+            canGadget ? (id, current) => setEditGadget({ _id: id, ...current }) : undefined
+          }
+          // Not gated on canGadget — vehicle write authority is a separate
+          // domain from gadgets. Left ungated here, the same way Print form
+          // above is: the server's assertCanWrite('vehicle') is the real
+          // check, this only decides whether the button is worth showing.
+          onEditVehicle={(id, current) => setEditVehicle({ _id: id, ...current })}
         />
       )}
 
@@ -147,6 +201,40 @@ export default function PersonProfile({
 
       {showForm && record && (
         <RegistrationForm person={record} onClose={() => setShowForm(false)} />
+      )}
+
+      {showEdit && data?.person && (
+        <PersonEditForm
+          person={
+            {
+              _id: personId,
+              full_name: data.person.full_name,
+              type: data.person.type,
+              id_number: data.person.id_number,
+              department_section: data.person.department_section,
+              contact_email: data.person.contact_email,
+              photo_url: data.person.photo_url,
+            } satisfies EditablePerson
+          }
+          onClose={() => setShowEdit(false)}
+          onSaved={() => {
+            setShowEdit(false);
+            load();
+          }}
+        />
+      )}
+
+      {showCard && record && (
+        <ReplaceCardDialog
+          personId={personId}
+          personName={record.full_name}
+          currentUid={record.rfid_uid}
+          onClose={() => setShowCard(false)}
+          onReplaced={() => {
+            setShowCard(false);
+            load();
+          }}
+        />
       )}
 
       {/*
@@ -175,6 +263,19 @@ export default function PersonProfile({
       )}
       */}
 
+      {showPurge && record && (
+        <PurgePersonDialog
+          personId={personId}
+          personName={record.full_name}
+          rfidUid={record.rfid_uid || null}
+          onClose={() => setShowPurge(false)}
+          onPurged={() => {
+            setShowPurge(false);
+            onBack();
+          }}
+        />
+      )}
+
       {showGadget && record && (
         <GadgetForm
           initialOwner={{
@@ -187,6 +288,28 @@ export default function PersonProfile({
             load();
           }}
           onClose={() => setShowGadget(false)}
+        />
+      )}
+
+      {editGadget && (
+        <GadgetEditForm
+          gadget={editGadget}
+          onClose={() => setEditGadget(null)}
+          onSaved={() => {
+            setEditGadget(null);
+            load();
+          }}
+        />
+      )}
+
+      {editVehicle && (
+        <VehicleEditForm
+          vehicle={editVehicle}
+          onClose={() => setEditVehicle(null)}
+          onSaved={() => {
+            setEditVehicle(null);
+            load();
+          }}
         />
       )}
     </div>

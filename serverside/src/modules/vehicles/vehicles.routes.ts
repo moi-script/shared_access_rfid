@@ -6,8 +6,12 @@ import { authorize } from '../../middlewares/authorize';
 import { validate } from '../../middlewares/validate';
 import { ROLES } from '../../constants/roles';
 import { vehicleController } from './vehicles.controller';
-import { createVehicleSchema, updateVehicleSchema,
-  reassignVehicleRfidSchema, vehicleStatusSchema } from './vehicles.schema';
+import {
+  bulkVehicleStatusSchema,
+  createVehicleSchema,
+  updateVehicleSchema,
+  vehicleStatusSchema,
+} from './vehicles.schema';
 
 export const vehicleRoutes = Router();
 
@@ -30,12 +34,16 @@ vehicleRoutes.use(
 vehicleRoutes.get('/', vehicleController.list);
 vehicleRoutes.get('/:id', vehicleController.get);
 vehicleRoutes.post('/', validate(createVehicleSchema), vehicleController.create);
+// ABOVE '/:id' and '/:id/status' deliberately: Express matches in declaration
+// order, so a literal path that looks like an id must be declared first or
+// '/:id/status' swallows it and the handler runs with id === 'bulk-status'.
+// Same trap persons.routes.ts:58 documents for its own bulk route.
+vehicleRoutes.patch(
+  '/bulk-status',
+  validate(bulkVehicleStatusSchema),
+  vehicleController.bulkSetStatus
+);
 vehicleRoutes.patch('/:id', validate(updateVehicleSchema), vehicleController.update);
 vehicleRoutes.patch('/:id/status', validate(vehicleStatusSchema), vehicleController.setStatus);
-vehicleRoutes.patch(
-  '/:id/rfid',
-  validate(reassignVehicleRfidSchema),
-  vehicleController.reassignRfid
-);
 vehicleRoutes.post('/:id/photo', uploadPhoto, vehicleController.uploadPhoto);
 vehicleRoutes.delete('/:id/photo', vehicleController.deletePhoto);

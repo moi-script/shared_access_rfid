@@ -1,6 +1,6 @@
 import { FilterQuery } from 'mongoose';
 import { vehicleRepo } from './vehicles.repository';
-import { IVehicle } from './vehicles.model';
+import { IVehicle, VehicleModel } from './vehicles.model';
 import { ApiError } from '../../utils/ApiError';
 import { getPagination, buildMeta } from '../../utils/pagination';
 import { Actor, assertCanWrite } from '../../utils/authority';
@@ -9,7 +9,6 @@ import { blockedCardRepo } from '../blockedCards/blockedCards.repository';
 import { personRepo } from '../persons/persons.repository';
 import { assertOwnerRegistrable } from '../persons/personStatus';
 import { assertUidFree } from '../../utils/assertUidFree';
-import { VEHICLE_LIMITS, VehicleType, pluralizeType } from '../../constants/vehicleTypes';
 import { escapeRegex } from '../../utils/escapeRegex';
 
 interface ListQuery {
@@ -24,11 +23,19 @@ interface ListQuery {
 interface ActiveVehicle {
   _id: unknown;
   vehicle_type: string;
+  plate_number?: string;
 }
 
 /**
- * Refuses a registration that would put an owner over their allowance for
- * that vehicle type.
+ * Refuses a registration for an owner who already holds an active vehicle.
+ *
+ * One active vehicle per person, of any type. The per-type allowance this
+ * replaces (VEHICLE_LIMITS) only made sense while each vehicle carried its own
+ * RFID sticker: the barrier could tell two of an owner's cars apart because
+ * each tag was distinct. A pass now carries the OWNER'S card, so a second
+ * active vehicle would give the barrier one UID and no way to know which
+ * vehicle is at it — the ambiguity scan.service's multiple_vehicles branch
+ * was written for, now refused at the registration desk instead.
  *
  * `active` must come from vehicleRepo.findActiveByOwner, which already scopes
  * to status 'active' AND valid_until >= now — the exact definition of "a
@@ -44,21 +51,40 @@ interface ActiveVehicle {
  */
 export function assertWithinLimit(
   active: ActiveVehicle[],
-  type: VehicleType,
   ownerName: string,
   excludeId?: unknown
 ): void {
-  const limit = VEHICLE_LIMITS[type];
-  const used = active.filter(
-    (v) => v.vehicle_type === type && (!excludeId || String(v._id) !== String(excludeId))
-  ).length;
-  if (used >= limit) {
+  const held = active.filter((v) => !excludeId || String(v._id) !== String(excludeId));
+  if (held.length > 0) {
     throw new ApiError(
       'CONFLICT',
-      `${ownerName} already has ${limit} active ${pluralizeType(type, limit)} (the limit). ` +
-        'Deactivate one first.'
+      `${ownerName} already has an active vehicle pass` +
+        (held[0].plate_number ? ` (${held[0].plate_number})` : '') +
+        '. ' +
+        "A pass uses the owner's own RFID card, so one person can hold only one. " +
+        'Deactivate that one first.'
     );
   }
+}
+
+/**
+ * The UID a vehicle pass is issued under: its owner's person card.
+ *
+ * Vehicles are no longer issued a sticker of their own, so there is nothing to
+ * type at the desk and nothing for a caller to get wrong — the UID is read off
+ * the owner here rather than accepted from the request body. An owner with no
+ * card cannot hold a pass at all: the barrier identifies a vehicle by its
+ * owner's tap, and there would be nothing to tap.
+ */
+export function ownerCardUid(owner: { full_name: string; rfid_uid?: string }): string {
+  if (!owner.rfid_uid) {
+    throw new ApiError(
+      'CONFLICT',
+      `${owner.full_name} has no RFID card. A vehicle pass uses the owner's card, ` +
+        'so assign one to them first.'
+    );
+  }
+  return owner.rfid_uid;
 }
 
 export const vehicleService = {
@@ -98,25 +124,28 @@ export const vehicleService = {
     // before the RFID and allowance checks so the clerk is told the real
     // reason ("this person is inactive") rather than a downstream symptom.
     assertOwnerRegistrable(owner, 'vehicle');
-    await assertUidFree(String(data.rfid_uid));
+    // Not data.rfid_uid: the pass carries the owner's card, so the UID is read
+    // off the owner and whatever the caller sent is ignored.
+    const rfid_uid = ownerCardUid(owner);
+    await assertUidFree(rfid_uid, undefined, String(owner._id));
     // A block enforced only at the barrier would be no block at all: a
     // retired UID could be re-registered here and would then resolve
     // normally at the gate. See scan.service.tap for the other half.
-    if (await blockedCardRepo.isBlocked(String(data.rfid_uid))) throw new ApiError('CARD_BLOCKED');
+    if (await blockedCardRepo.isBlocked(rfid_uid)) throw new ApiError('CARD_BLOCKED');
     const existingPlate = await vehicleRepo.findByPlate(String(data.plate_number));
     if (existingPlate) throw new ApiError('DUPLICATE_PLATE', 'Plate already registered');
-    // Per-type allowance, replacing the old one-active-vehicle-per-owner
-    // rule. That rule existed because the owner's CARD was the only key, so
-    // two active passes gave the barrier no way to know which car was being
-    // driven. Each vehicle now carries its own RFID sticker, so the barrier
-    // identifies the vehicle directly and several active passes are fine.
-    // scan.service.tap still denies an owner-CARD tap on a multi-vehicle
-    // owner — see the multiple_vehicles branch there.
+    // One active vehicle per owner. The owner's CARD is the key again, so two
+    // active passes would give the barrier no way to know which vehicle is at
+    // it — see assertWithinLimit.
     if ((data.status ?? 'active') === 'active') {
       const active = await vehicleRepo.findActiveByOwner(owner._id, new Date());
-      assertWithinLimit(active, data.vehicle_type as VehicleType, owner.full_name);
+      assertWithinLimit(active, owner.full_name);
     }
-    return vehicleRepo.create({ ...data, valid_until: data.valid_until ?? nextSchoolYearEnd() });
+    return vehicleRepo.create({
+      ...data,
+      rfid_uid,
+      valid_until: data.valid_until ?? nextSchoolYearEnd(),
+    });
   },
   async update(id: string, data: Partial<IVehicle>, actor: Actor) {
     assertCanWrite(actor, 'vehicle');
@@ -130,9 +159,17 @@ export const vehicleService = {
     if (data.rfid_uid) {
       const currentForRfid = await vehicleRepo.findById(id);
       if (!currentForRfid) throw new ApiError('NOT_FOUND', 'Vehicle not found');
+      // A pass carries its owner's card, so there is no such thing as giving
+      // one a different UID: the only way to change it is to replace the
+      // person's card, which carries onto the vehicle in
+      // personService.reassignRfid. Re-sending the CURRENT uid is still fine —
+      // an edit form that PATCHes the whole row must keep working.
       if (data.rfid_uid !== currentForRfid.rfid_uid) {
-        await assertUidFree(data.rfid_uid, { kind: 'vehicle', id });
-        if (await blockedCardRepo.isBlocked(data.rfid_uid)) throw new ApiError('CARD_BLOCKED');
+        throw new ApiError(
+          'CONFLICT',
+          "A vehicle pass uses its owner's RFID card and cannot be given a tag of " +
+            "its own. Replace the owner's card instead."
+        );
       }
     }
     // Fail closed whenever the barrier's arming state could change: either
@@ -154,12 +191,10 @@ export const vehicleService = {
     // touching status or owner_person_id — skipping this check entirely if
     // it were not listed here too.
     //
-    // vehicle_type is a FOURTH re-arming field, and a new one: it became
-    // load-bearing the moment limits went per-type. A PATCH that only changes
-    // vehicle_type on an already-active vehicle touches neither status,
-    // owner, nor valid_until — so without it listed here, moving a vehicle
-    // from `van` (limit 3) to `truck` (limit 1) would skip the allowance
-    // check entirely and hand an owner a second active truck.
+    // vehicle_type is listed for the same fail-closed reason, though it stopped
+    // being load-bearing when the allowance went from per-type to one active
+    // vehicle per person: re-running the check on a type change costs one
+    // query and keeps this list matching "any field that could re-arm".
     if (
       data.status === 'active' ||
       data.owner_person_id ||
@@ -203,10 +238,9 @@ export const vehicleService = {
         // exact state it exists to reach.
         assertOwnerRegistrable(owner, 'vehicle');
         const active = await vehicleRepo.findActiveByOwner(owner._id, new Date());
-        const effectiveType = (data.vehicle_type ?? current.vehicle_type) as VehicleType;
         // current._id is excluded: an already-active vehicle must not count
         // against its own limit on a PATCH that merely re-sends its fields.
-        assertWithinLimit(active, effectiveType, owner.full_name, current._id);
+        assertWithinLimit(active, owner.full_name, current._id);
       }
     }
     const updated = await vehicleRepo.updateById(id, data);
@@ -219,51 +253,25 @@ export const vehicleService = {
   },
 
   /**
-   * Replaces a vehicle's sticker and retires the old one.
+   * Switches off every active pass in the system, ignoring any list filters.
    *
-   * A dedicated endpoint rather than "just PATCH rfid_uid", which `update`
-   * already accepts and validates. The difference is the second half: `update`
-   * swaps the tag and leaves the OLD one in the pool, free to be registered
-   * again by anyone. personService.reassignRfid and gadgetService.reassignRfid
-   * both block it instead, on the reasoning that a physically retired sticker
-   * is usually retired because it was lost — and a lost tag that stays
-   * re-registrable is a spare key to the barrier. A vehicle's tag was the one
-   * of the three with no such path, so replacing one silently behaved
-   * differently from replacing the other two.
+   * Deactivate-only by design — see bulkVehicleStatusSchema for why there is
+   * no bulk activate. One updateMany rather than a loop over update(): the
+   * per-row path exists to run owner and allowance checks before a pass is
+   * ARMED, and none of them apply in the disarming direction. Nothing at the
+   * barrier can be made more permissive by this call.
    *
-   * Same deliberate fail-open as the other two: the swap is written FIRST and
-   * the old tag blocked second, so a failed block cannot leave the vehicle with
-   * no working tag at all. If the block throws afterwards the old UID is off
-   * this vehicle AND off the blocklist — back in the pool — so it is logged at
-   * error level rather than swallowed.
+   * Scoped to rows that are not already inactive so `modified` reports what
+   * actually changed rather than the size of the collection. Soft-deleted rows
+   * are included: the model has no deleted_at, and an inactive row is inert
+   * either way.
    */
-  async reassignRfid(id: string, rfid_uid: string, actor: Actor) {
+  async bulkSetStatus(status: 'inactive', actor: Actor) {
     assertCanWrite(actor, 'vehicle');
-    const existing = await vehicleRepo.findById(id);
-    if (!existing) throw new ApiError('NOT_FOUND', 'Vehicle not found');
-    if (await blockedCardRepo.isBlocked(rfid_uid)) throw new ApiError('CARD_BLOCKED');
-    await assertUidFree(rfid_uid, { kind: 'vehicle', id });
-
-    const updated = await vehicleRepo.updateById(id, { rfid_uid });
-    if (!updated) throw new ApiError('NOT_FOUND', 'Vehicle not found');
-
-    if (existing.rfid_uid && existing.rfid_uid !== rfid_uid) {
-      try {
-        await blockedCardRepo.block({
-          rfid_uid: existing.rfid_uid,
-          source: 'card_replaced',
-          previous_person_id: existing.owner_person_id,
-          blocked_by: actor.id,
-        });
-      } catch (err) {
-        console.error(
-          `[vehicles] FAILED to block retired tag ${existing.rfid_uid} after reassignRfid ` +
-            `for vehicle ${id} — this UID is now unassigned AND unblocked, and is ` +
-            're-registrable until manually blocked.',
-          err
-        );
-      }
-    }
-    return updated;
+    const filter = { status: { $ne: status } };
+    const matched = await VehicleModel.countDocuments(filter);
+    const result = await VehicleModel.updateMany(filter, { $set: { status } });
+    return { matched, modified: result.modifiedCount };
   },
+
 };

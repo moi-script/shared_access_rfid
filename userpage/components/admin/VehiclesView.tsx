@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiGet, apiPatch } from "@/lib/auth";
+import { apiGet, apiGetList, apiPatch } from "@/lib/auth";
 import { VEHICLE_TYPES } from "@/lib/vehicleTypes";
 import Notice from "@/components/Notice";
 import SectionHeading from "@/components/SectionHeading";
@@ -77,6 +77,9 @@ function fmtDate(iso: string): string {
     : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+/** Typed verbatim before the fleet-wide switch-off runs. Matches AccountsView. */
+const CONFIRM_WORD = "DEACTIVATE";
+
 export default function VehiclesView() {
   const [rows, setRows] = useState<VehicleRow[]>([]);
   const [type, setType] = useState("");
@@ -87,6 +90,14 @@ export default function VehiclesView() {
   // Keyed by vehicle id, not a single boolean: one slow row must not freeze the
   // whole table, and a double-click must not queue two writes for the same row.
   const [busyId, setBusyId] = useState<string | null>(null);
+  // How many passes the fleet-wide switch-off would actually change. Read from
+  // the list endpoint's own pagination total rather than from `rows`, which is
+  // capped at 100 AND scoped to the filters on screen — this button ignores
+  // both, so counting what is rendered would understate it.
+  const [activeTotal, setActiveTotal] = useState<number | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
   const gen = useRef(0);
 
   const load = useCallback(async () => {
@@ -98,9 +109,15 @@ export default function VehiclesView() {
       if (status) p.set("status", status);
       if (search.trim()) p.set("search", search.trim());
       p.set("limit", "100");
-      const list = await apiGet<VehicleRow[]>(`/vehicles?${p.toString()}`);
+      const [list, active] = await Promise.all([
+        apiGet<VehicleRow[]>(`/vehicles?${p.toString()}`),
+        // Deliberately unfiltered: the count belongs to the fleet-wide button,
+        // not to the table. limit=1 because only the total is wanted.
+        apiGetList<VehicleRow>(`/vehicles?status=active&limit=1`),
+      ]);
       if (mine !== gen.current) return; // a newer load started; discard this
       setRows(list);
+      setActiveTotal(active.total);
     } catch (err) {
       if (mine !== gen.current) return;
       setError((err as Error).message);
@@ -149,14 +166,31 @@ export default function VehiclesView() {
     }
   }
 
+  async function deactivateAll() {
+    setBulkBusy(true);
+    // Same deferred-error handling as toggle(): load() clears the error first,
+    // so a message set before it would be batched away unseen.
+    let bulkError: string | null = null;
+    try {
+      await apiPatch(`/vehicles/bulk-status`, { status: "inactive" });
+      setConfirming(false);
+      setTyped("");
+    } catch (err) {
+      bulkError = (err as Error).message;
+    } finally {
+      setBulkBusy(false);
+      await load();
+      if (bulkError) setError(bulkError);
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div>
         <h1 className="font-display text-xl font-700 text-navy">Vehicles</h1>
         <p className="text-sm text-ink-soft">
-          Deactivating a vehicle frees the owner&apos;s slot for that type and stops its
-          RFID sticker at the barrier. The registration is kept, so you can reactivate it
-          later.
+          Deactivating a vehicle frees the owner&apos;s slot and stops their card opening
+          the vehicle barrier. The registration is kept, so you can reactivate it later.
         </p>
       </div>
 
@@ -185,7 +219,66 @@ export default function VehiclesView() {
             placeholder="Search plate or RFID UID…"
             className={`min-w-[16rem] flex-1 ${selectCls}`}
           />
+          {/* Sits with the filters but is NOT scoped by them — the label says
+              so, and the confirmation spells it out again before anything is
+              written. Disabled at zero so it cannot be fired on an already
+              switched-off fleet. */}
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={!activeTotal}
+            className="rounded-xl border-2 border-red bg-red/25 px-4 py-2 text-sm font-600 text-ink transition hover:bg-red/45 disabled:opacity-40"
+          >
+            Deactivate all ({activeTotal ?? 0})
+          </button>
         </div>
+
+        {confirming && (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-navy/40 p-6">
+            <div className="w-full max-w-md rounded-2xl border border-line bg-white p-6">
+              <h2 className="font-display text-lg font-700 text-navy">
+                Deactivate {activeTotal ?? 0} vehicle{activeTotal === 1 ? "" : "s"}?
+              </h2>
+              <p className="mt-2 text-sm text-ink-soft">
+                This ignores the filters on screen: every active pass in the system is
+                switched off, and each owner&apos;s card stops opening the vehicle
+                barrier. The registrations are kept, so any of them can be reactivated
+                one at a time from this list.
+              </p>
+
+              <label className="mt-4 block text-xs font-600 uppercase tracking-[0.12em] text-ink-soft">
+                Type {CONFIRM_WORD} to confirm
+                <input
+                  value={typed}
+                  onChange={(e) => setTyped(e.target.value)}
+                  className="mt-1 block w-full rounded-xl border border-line px-3 py-2 text-sm text-ink"
+                  autoFocus
+                />
+              </label>
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirming(false);
+                    setTyped("");
+                  }}
+                  className="rounded-xl border border-line px-4 py-2 text-sm font-600 text-ink-soft"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deactivateAll()}
+                  disabled={typed !== CONFIRM_WORD || bulkBusy}
+                  className="rounded-xl border-2 border-red bg-red/25 px-4 py-2 text-sm font-600 text-ink disabled:opacity-40"
+                >
+                  {bulkBusy ? "Deactivating…" : "Deactivate all"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {loading && <p className="mt-3 text-[15px] text-ink-soft">Loading…</p>}
 

@@ -105,3 +105,4 @@ personRoutes.patch(
 // above and is not something registrar/hr/oss authority should reach.
 personRoutes.delete('/:id', authorize(ROLES.SUPERADMIN), personController.remove);
 personRoutes.post('/:id/restore', authorize(ROLES.SUPERADMIN), personController.restore);
+   personRoutes.delete('/:id/purge', authorize(ROLES.SUPERADMIN), personController.purgeForTesting);

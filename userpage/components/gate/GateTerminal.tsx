@@ -139,7 +139,14 @@ function DevicePromptPanel({
         </h1>
         <div className="mx-auto mt-6 max-w-xl space-y-3 text-left">
           {prompt.expected.map((g) => {
-            const ticked = prompt.seen.some((s) => s.id === g.id);
+            // `g` comes from gadgets_inside, which the server deliberately sends
+            // without a photo_url (see scan.service.ts) — the exit lane is meant
+            // to confirm a device once it is actually read back, not to preview
+            // it in advance. The photo only exists once the matching tap has
+            // landed in `seen`, which carries the full gadget row (photo_url
+            // included) exactly like the entry lane's checklist does.
+            const seenMatch = prompt.seen.find((s) => s.id === g.id);
+            const ticked = Boolean(seenMatch);
             return (
               <div
                 key={g.id}
@@ -147,6 +154,9 @@ function DevicePromptPanel({
                   ticked ? "bg-current/15" : "bg-current/5"
                 }`}
               >
+                <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-xl bg-current/15">
+                  <GadgetImage path={seenMatch?.photo_url} gateKey={gateKey} />
+                </div>
                 <div
                   className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-lg font-700 ${
                     ticked ? "bg-current/25" : "bg-current/10 opacity-40"

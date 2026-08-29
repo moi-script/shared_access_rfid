@@ -27,6 +27,13 @@ export const REASON_TEXT: Record<string, string> = {
   // identity is revealed. A raw snake_case code on an operator screen has
   // been a must-fix twice here; do not let this one slip through either.
   card_blocked: "Card blocked",
+  // Gate-session denials (scan.service.ts's gateSessionStore). Both fire only
+  // for a gadget entity — a person's own card is never checked against a
+  // session — so the wording speaks to the guard about the DEVICE, matching
+  // no_vehicle_registered/multiple_vehicles' pattern of naming the fix, not
+  // the mechanism.
+  gadget_requires_person_tap: "Tap the person's card first",
+  gadget_owner_mismatch: "Device belongs to someone else",
 };
 
 export function reasonText(reason: string): string {
