@@ -414,6 +414,46 @@ async function runChecks(): Promise<void> {
     expectEqual(`gate '${name}' direction`, gate?.direction, want.direction);
   }
 
+  console.log('\n== every terminal route resolves to its OWN gate ==');
+
+  // The seed contract the gate terminals depend on. GATE_ROUTES in
+  // userpage/lib/gateTerminal.ts provisions by gate NAME, because two of its
+  // routes — person-entry and person-entry-gadget — share a type/direction
+  // pair and cannot be told apart by shape.
+  //
+  // This is asserted here rather than left to the frontend because the failure
+  // is silent and remote: rename a gate in seed.ts and nothing breaks in any
+  // test, but a guard at that terminal gets "No gate named ... exists" and the
+  // lane cannot be armed at all. The names below must match GATE_ROUTES.
+  const ROUTE_GATES: { route: string; name: string; type: string; direction: string }[] = [
+    { route: 'person-entry', name: 'Main Entrance', type: 'person', direction: 'entry' },
+    { route: 'person-entry-gadget', name: 'Gadget Lane', type: 'person', direction: 'entry' },
+    { route: 'person-exit', name: 'Side Gate', type: 'person', direction: 'exit' },
+    { route: 'vehicle-entry', name: 'Parking Entrance', type: 'vehicle', direction: 'entry' },
+    { route: 'vehicle-exit', name: 'Parking Exit', type: 'vehicle', direction: 'exit' },
+  ];
+  for (const r of ROUTE_GATES) {
+    const g = gates.find((x) => x.name === r.name);
+    expectEqual(`route ${r.route} finds a gate named '${r.name}'`, Boolean(g), true);
+    if (g) {
+      expectEqual(
+        `'${r.name}' is still ${r.type}/${r.direction}`,
+        `${g.type}/${g.direction}`,
+        `${r.type}/${r.direction}`
+      );
+    }
+  }
+  // The regression this whole block exists for: two routes must never resolve
+  // to the same gate. When they did, each terminal's provisioning revoked the
+  // other's key — gateKeyService.mint deactivates a gate's previous keys — so
+  // both fell back to the password screen on their next tap, permanently.
+  const resolvedIds = ROUTE_GATES.map((r) => String(gates.find((x) => x.name === r.name)?._id));
+  expectEqual(
+    'the five routes resolve to five DISTINCT gates',
+    new Set(resolvedIds).size,
+    ROUTE_GATES.length
+  );
+
   console.log('\n== device key minting ==');
   const mainGate = gates.find((g) => g.name === 'Main Entrance');
   const parkingIn = gates.find((g) => g.name === 'Parking Entrance');

@@ -68,12 +68,25 @@ export default function GateProvisioning({
         | null;
       if (!gatesBody || gatesBody.success !== true) throw new Error("Could not load gates");
 
-      const gate = gatesBody.data.find(
-        (g) => g.type === expected.type && g.direction === expected.direction
-      );
+      // Matched on NAME, which is unique on the Gate schema — never on
+      // type + direction, which person-entry and person-entry-gadget share.
+      // That older lookup returned the first listed match for both routes, so
+      // the two terminals armed one gate and revoked each other's key on every
+      // provision. See the GATE_ROUTES docblock.
+      const gate = gatesBody.data.find((g) => g.name === expected.gateName);
       if (!gate) {
         throw new Error(
-          `No ${expected.type}/${expected.direction} gate exists. Run the seed on the server first.`
+          `No gate named '${expected.gateName}' exists. Run the seed on the server first.`
+        );
+      }
+      // The name found the gate; this asserts the seed did not repurpose it
+      // into a different kind of lane. Provisioning an exit terminal against an
+      // entry gate would send every tap the wrong direction, and the tap would
+      // be GRANTED — a silently wrong record rather than a visible failure.
+      if (gate.type !== expected.type || gate.direction !== expected.direction) {
+        throw new Error(
+          `Gate '${gate.name}' is ${gate.type}/${gate.direction}, but this terminal is ` +
+            `${expected.type}/${expected.direction}. Check the gate seed on the server.`
         );
       }
 

@@ -152,13 +152,17 @@ export default function LoginExperience() {
             />
 
             {/* password */}
-            <div className="mb-1.5 flex items-center justify-between">
+            {/* No "Forgot?" link. There is no self-service reset in this system
+                and no endpoint behind one — auth exposes login, refresh, logout
+                and change-password, nothing else. The link that used to sit
+                here was an <a href="#"> with no handler, so it scrolled to the
+                top of the page and promised a recovery flow that does not
+                exist. A password is reset by a superadmin through
+                PATCH /users/:id/password; the person asks an admin. */}
+            <div className="mb-1.5">
               <label className="text-[13px] font-500 text-ink-soft" htmlFor="password">
                 Password
               </label>
-              <a href="#" className={`text-[13px] font-600 ${accent.text} hover:underline`}>
-                Forgot?
-              </a>
             </div>
             <div className="relative mb-4">
               <input
