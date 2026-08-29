@@ -217,4 +217,53 @@ export const vehicleService = {
     assertCanWrite(actor, 'vehicle');
     return this.update(id, { status }, actor);
   },
+
+  /**
+   * Replaces a vehicle's sticker and retires the old one.
+   *
+   * A dedicated endpoint rather than "just PATCH rfid_uid", which `update`
+   * already accepts and validates. The difference is the second half: `update`
+   * swaps the tag and leaves the OLD one in the pool, free to be registered
+   * again by anyone. personService.reassignRfid and gadgetService.reassignRfid
+   * both block it instead, on the reasoning that a physically retired sticker
+   * is usually retired because it was lost — and a lost tag that stays
+   * re-registrable is a spare key to the barrier. A vehicle's tag was the one
+   * of the three with no such path, so replacing one silently behaved
+   * differently from replacing the other two.
+   *
+   * Same deliberate fail-open as the other two: the swap is written FIRST and
+   * the old tag blocked second, so a failed block cannot leave the vehicle with
+   * no working tag at all. If the block throws afterwards the old UID is off
+   * this vehicle AND off the blocklist — back in the pool — so it is logged at
+   * error level rather than swallowed.
+   */
+  async reassignRfid(id: string, rfid_uid: string, actor: Actor) {
+    assertCanWrite(actor, 'vehicle');
+    const existing = await vehicleRepo.findById(id);
+    if (!existing) throw new ApiError('NOT_FOUND', 'Vehicle not found');
+    if (await blockedCardRepo.isBlocked(rfid_uid)) throw new ApiError('CARD_BLOCKED');
+    await assertUidFree(rfid_uid, { kind: 'vehicle', id });
+
+    const updated = await vehicleRepo.updateById(id, { rfid_uid });
+    if (!updated) throw new ApiError('NOT_FOUND', 'Vehicle not found');
+
+    if (existing.rfid_uid && existing.rfid_uid !== rfid_uid) {
+      try {
+        await blockedCardRepo.block({
+          rfid_uid: existing.rfid_uid,
+          source: 'card_replaced',
+          previous_person_id: existing.owner_person_id,
+          blocked_by: actor.id,
+        });
+      } catch (err) {
+        console.error(
+          `[vehicles] FAILED to block retired tag ${existing.rfid_uid} after reassignRfid ` +
+            `for vehicle ${id} — this UID is now unassigned AND unblocked, and is ` +
+            're-registrable until manually blocked.',
+          err
+        );
+      }
+    }
+    return updated;
+  },
 };

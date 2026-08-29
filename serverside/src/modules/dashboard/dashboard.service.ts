@@ -341,6 +341,9 @@ export const dashboardService = {
       attendance_summary,
       recent_attendance: recent,
       vehicles: vehicles.map((vehicle) => ({
+        // The row's own id, so the profile can act on it — replacing a tag
+        // needs a target, and plate/serial are labels, not handles.
+        id: String(vehicle._id),
         plate_number: vehicle.plate_number,
         vehicle_type: vehicle.vehicle_type,
         vehicle_model: vehicle.vehicle_model ?? null,
@@ -348,9 +351,15 @@ export const dashboardService = {
         status: vehicle.status,
       })),
       gadgets: gadgets.map((gadget) => ({
+        id: String(gadget._id),
         gadget_type: gadget.gadget_type,
         brand_model: gadget.brand_model,
         serial_number: gadget.serial_number,
+        // Nullable where the vehicle's above is not: a gadget can be registered
+        // before its sticker arrives (gadgets.schema.ts makes rfid_uid
+        // optional), so the profile has to distinguish "no tag yet" from a tag
+        // it simply failed to send.
+        rfid_uid: gadget.rfid_uid ?? null,
         status: gadget.status,
       })),
       recent_scans: scans,

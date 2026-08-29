@@ -45,6 +45,7 @@ export interface PersonOverview {
   attendance_summary: { present: number; late: number; absent: number };
   recent_attendance: AttendanceRow[];
   vehicles: {
+    id: string;
     plate_number: string;
     vehicle_type: string;
     vehicle_model: string | null;
@@ -55,9 +56,13 @@ export interface PersonOverview {
     // GadgetType, not string: gadgetTypeLabel() is typed to the union, and the
     // server projects straight off a Mongoose enum, so widening to string here
     // only buys a cast at the call site.
+    id: string;
     gadget_type: GadgetType;
     brand_model: string;
     serial_number: string;
+    /** Nullable, unlike a vehicle's: a device can be registered before its
+     *  sticker arrives, and is then carried with no tag of its own. */
+    rfid_uid: string | null;
     status: string;
   }[];
   recent_scans: ScanRow[];
@@ -83,7 +88,18 @@ const statusStyle: Record<string, string> = {
 
 /** Full person profile: identity, attendance, vehicle, recent activity.
  * Used both by a student's own dashboard and by the admin's per-person view. */
-export default function ProfileView({ data }: { data: PersonOverview }) {
+export default function ProfileView({
+  data,
+  onReplaceTag,
+}: {
+  data: PersonOverview;
+  /**
+   * Supplied only by the admin directory (PersonProfile). Absent on a student's
+   * own dashboard, which renders this same component — so the buttons are gated
+   * by whether the caller can act at all, not by a role check repeated here.
+   */
+  onReplaceTag?: (kind: "vehicle" | "gadget", id: string, label: string, currentUid: string | null) => void;
+}) {
   const p = data.person;
   const kindLabel = p?.type === "student" ? "Student" : p?.type === "staff" ? "Staff" : "Member";
 
@@ -182,7 +198,20 @@ export default function ProfileView({ data }: { data: PersonOverview }) {
                       {v.vehicle_type}
                       {v.vehicle_model ? ` · ${v.vehicle_model}` : ""}
                     </p>
-                    <p className="font-mono text-[12px] text-ink-soft">{v.rfid_uid}</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-mono text-[12px] text-ink-soft">{v.rfid_uid}</p>
+                      {onReplaceTag && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onReplaceTag("vehicle", v.id, v.plate_number, v.rfid_uid)
+                          }
+                          className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-[12px] font-600 text-ink-soft hover:border-navy hover:text-ink"
+                        >
+                          Replace tag
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </li>
               ))}
@@ -217,6 +246,29 @@ export default function ProfileView({ data }: { data: PersonOverview }) {
                     <p className="text-ink-soft">
                       {gadgetTypeLabel(g.gadget_type)} · {g.brand_model}
                     </p>
+                    {/* The device's own tag, mirroring the vehicle row above.
+                        Spelled out when absent rather than left blank: an empty
+                        slot reads as "the screen did not load it", and "no
+                        sticker yet" is a real state someone acts on — it is the
+                        device that will not appear on any gate checklist. */}
+                    <div className="flex items-center justify-between gap-2">
+                      {g.rfid_uid ? (
+                        <p className="font-mono text-[12px] text-ink-soft">{g.rfid_uid}</p>
+                      ) : (
+                        <p className="text-[12px] italic text-ink-soft">No RFID sticker yet</p>
+                      )}
+                      {onReplaceTag && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onReplaceTag("gadget", g.id, g.brand_model, g.rfid_uid)
+                          }
+                          className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-[12px] font-600 text-ink-soft hover:border-navy hover:text-ink"
+                        >
+                          {g.rfid_uid ? "Replace tag" : "Assign tag"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </li>
               ))}

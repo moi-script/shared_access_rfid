@@ -31,3 +31,16 @@ export const createVehicleSchema = z.object({
 
 export const updateVehicleSchema = createVehicleSchema.partial();
 export const vehicleStatusSchema = z.object({ status: z.enum(['active', 'inactive']) });
+
+/**
+ * A dedicated schema for the sticker swap, matching reassignGadgetRfidSchema.
+ * Separate from updateVehicleSchema because this endpoint does one thing and
+ * must not accept a drive-by edit to the plate or the owner alongside it.
+ */
+export const reassignVehicleRfidSchema = z.object({
+  // Uppercased like every other rfid_uid — see createVehicleSchema's note.
+  rfid_uid: z
+    .string()
+    .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
+    .transform((v) => v.toUpperCase()),
+});
