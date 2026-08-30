@@ -15,6 +15,7 @@ export default function OverviewView({ data }: { data: AdminDashboard }) {
   // count — the moment the last person taps out is exactly when this matters.
   const persons_inside = live?.persons_inside ?? data?.persons_inside;
   const vehicles_inside = live?.vehicles_inside ?? data?.vehicles_inside;
+  const gadgets_inside = live?.gadgets_inside ?? data?.gadgets_inside;
   const granted_today = live?.granted_today ?? data?.granted_today;
   const denied_today = live?.denied_today ?? data?.denied_today;
   const recent_scans = live?.recent_scans ?? data?.recent_scans;
@@ -90,6 +91,14 @@ export default function OverviewView({ data }: { data: AdminDashboard }) {
               </p>
               <p className="mt-1.5 text-[13px] text-ink-soft">
                 {vehicles_inside === 1 ? "vehicle" : "vehicles"}
+              </p>
+            </div>
+            <div className="border-l border-line pl-6">
+              <p className="font-display text-2xl font-700 leading-none text-ink-soft">
+                {gadgets_inside ?? "—"}
+              </p>
+              <p className="mt-1.5 text-[13px] text-ink-soft">
+                {gadgets_inside === 1 ? "device" : "devices"}
               </p>
             </div>
           </div>
@@ -178,8 +187,16 @@ export default function OverviewView({ data }: { data: AdminDashboard }) {
                 className="flex items-center justify-between gap-3 py-2.5 text-[14px]"
               >
                 <div className="min-w-0">
-                  <p className="truncate font-600 text-ink">
+                  <p className="flex items-center gap-1.5 truncate font-600 text-ink">
                     {s.name ?? <span className="font-mono text-ink-soft">{s.rfid_uid}</span>}
+                    {/* Person is the overwhelming majority of taps and needs no
+                        label; gadget and vehicle are the exceptions worth
+                        calling out so a device tap doesn't read as a person. */}
+                    {s.entity_type !== "person" && (
+                      <span className="shrink-0 rounded-md bg-ink-soft/10 px-1.5 py-0.5 text-[10px] font-600 uppercase tracking-wide text-ink-soft">
+                        {s.entity_type}
+                      </span>
+                    )}
                   </p>
                   <p className="text-[12px] text-ink-soft">
                     {s.gate} · <span className="capitalize">{s.direction}</span>

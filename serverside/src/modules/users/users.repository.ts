@@ -90,6 +90,7 @@ export const userRepo = {
     ).map((p) => p._id as Types.ObjectId);
     return { ...base, person_id: { $in: personIds } };
   },
+  deleteById: (id: string) => UserModel.deleteOne({ _id: id }),
 
   async findPaginatedWithPerson(filter: FilterQuery<IUser>, p: PaginationParams) {
     const [docs, total] = await Promise.all([
