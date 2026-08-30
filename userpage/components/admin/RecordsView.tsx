@@ -300,7 +300,7 @@ export default function RecordsView() {
 
         <div className="ml-auto flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-[12px] text-ink-soft">
-            <span
+            {/* <span
               className={`h-1.5 w-1.5 rounded-full ${
                 streamStatus === "reconnecting"
                   ? "bg-red"
@@ -317,7 +317,7 @@ export default function RecordsView() {
                   ? "Live"
                   : to
                     ? "Paused · closed date range"
-                    : `Paused · page ${page}`}
+                    : `Paused · page ${page}`} */}
           </span>
 
           {heldBack > 0 && (

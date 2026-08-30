@@ -12,7 +12,7 @@ export interface GateStatus {
 export interface ScanRow {
   name?: string;
   rfid_uid: string;
-  entity_type: "person" | "vehicle";
+  entity_type: "person" | "vehicle" | "gadget";
   gate: string;
   direction: "entry" | "exit";
   access_result: "granted" | "denied";
@@ -35,6 +35,7 @@ export interface AdminDashboard {
   persons_by_type: { student: number; staff: number; employee: number };
   persons_inside: number;
   vehicles_inside: number;
+  gadgets_inside: number;
   active_today: number;
   total_vehicles: number;
   total_gadgets: number;
@@ -55,6 +56,7 @@ export interface AdminDashboard {
 export interface LiveOverview {
   persons_inside: number;
   vehicles_inside: number;
+  gadgets_inside: number;
   scan_events_today: number;
   granted_today: number;
   denied_today: number;

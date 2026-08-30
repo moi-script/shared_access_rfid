@@ -775,8 +775,8 @@ import { occupancyRepo } from '../occupancy/occupancy.repository';
 import { lastResetBoundary } from '../../utils/occupancyWindow';
 import { parseLocalDateRange } from '../../utils/dateRange';
 import { liveHub } from '../dashboard/liveHub';
+// import { gateSessionStore } from './gateSession.store';
 import { gateSessionStore } from './gateSession.store';
-
 interface TapInput {
   rfid_uid: string;
   gate_id: string;
