@@ -39,7 +39,7 @@ export default function PurgePersonDialog({
 
   useEffect(() => {
     let cancelled = false;
-    // limit=1: only meta.total is needed, not the rows themselves. Counts
+    // limit=1: only the total is needed, not the rows themselves. Counts
     // ALL statuses, not just active — a hard purge removes inactive rows
     // too, and the warning has to be honest about that.
     Promise.all([
@@ -48,8 +48,8 @@ export default function PurgePersonDialog({
     ])
       .then(([vehicles, gadgets]) => {
         if (cancelled) return;
-        setVehicleCount(vehicles.meta?.total ?? 0);
-        setGadgetCount(gadgets.meta?.total ?? 0);
+        setVehicleCount(vehicles.total);
+        setGadgetCount(gadgets.total);
       })
       .catch((err: Error) => {
         if (!cancelled) setImpactError(err.message);

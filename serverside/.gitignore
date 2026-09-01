@@ -3,5 +3,6 @@ dist/
 .env
 .env.production
 .env.*.local
+.env.bak-*
 .gate-keys.local.txt
 *.log
