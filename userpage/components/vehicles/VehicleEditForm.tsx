@@ -193,7 +193,7 @@ export default function VehicleEditForm({
           <p className="mb-1 text-[13px] font-600 text-ink-soft">
             Photo — leave blank to keep the current one
           </p>
-          <PhotoCapture onChange={setPhoto} />
+          <PhotoCapture onChange={setPhoto} fit="whole" />
         </div>
 
         <button

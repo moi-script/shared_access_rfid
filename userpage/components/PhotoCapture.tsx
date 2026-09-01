@@ -4,9 +4,31 @@ import { useEffect, useRef, useState } from "react";
 import Notice from "@/components/Notice";
 
 const SIZE = 400;
+/** Longest edge for a whole-frame photo. Larger than SIZE because nothing is
+ *  being thrown away here: a wide vehicle shot at 400px would leave the plate
+ *  under 100px across, and the plate is the reason the photo exists. */
+const MAX_EDGE = 800;
 const QUALITY = 0.82;
 
 type Tab = "upload" | "camera";
+
+/**
+ * How the chosen image is fitted before upload.
+ *
+ * `square` cover-crops to a centred square: an ID portrait is rendered in
+ * round and square avatar frames all over the app, and a face is reliably in
+ * the middle of the shot, so cropping once here beats every consumer cropping
+ * differently.
+ *
+ * `whole` keeps the entire frame, only scaling it down. A laptop or a car
+ * photographed at arm's length does NOT put its subject in a centred square —
+ * a plate sits low and wide, a laptop lid fills a landscape frame — so the
+ * square crop was silently eating the part the guard is meant to compare
+ * against the object in front of them. This is a pixel-level fact, not a
+ * display one: the cropped pixels never reached the server, so no amount of
+ * object-contain at the far end could bring them back.
+ */
+export type PhotoFit = "square" | "whole";
 
 /** Cover-crops a source image to a square canvas and returns a JPEG blob. */
 async function toSquareJpeg(source: CanvasImageSource, w: number, h: number): Promise<Blob> {
@@ -31,10 +53,41 @@ async function toSquareJpeg(source: CanvasImageSource, w: number, h: number): Pr
   });
 }
 
+/**
+ * Scales a source image to fit inside MAX_EDGE and returns a JPEG blob. The
+ * canvas takes the image's own aspect ratio, so every pixel of the original
+ * frame survives — the whole point of this path. An image already smaller than
+ * MAX_EDGE is re-encoded at its own size rather than upscaled.
+ */
+async function toWholeJpeg(source: CanvasImageSource, w: number, h: number): Promise<Blob> {
+  const scale = Math.min(1, MAX_EDGE / Math.max(w, h));
+  const canvas = document.createElement("canvas");
+  // Rounded, and floored at 1: a canvas dimension of 0 (a sub-pixel sliver of
+  // an image) throws on toBlob rather than producing an empty picture.
+  canvas.width = Math.max(1, Math.round(w * scale));
+  canvas.height = Math.max(1, Math.round(h * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas is unavailable in this browser");
+
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error("Could not encode the image"))),
+      "image/jpeg",
+      QUALITY
+    );
+  });
+}
+
 export default function PhotoCapture({
   onChange,
+  fit = "square",
 }: {
   onChange: (blob: Blob | null) => void;
+  /** See PhotoFit. Defaults to the ID-portrait behaviour, so a caller that
+   *  says nothing keeps the square crop it has always had. */
+  fit?: PhotoFit;
 }) {
   const [tab, setTab] = useState<Tab>("upload");
   const [preview, setPreview] = useState<string | null>(null);
@@ -100,6 +153,10 @@ export default function PhotoCapture({
     if (tab !== "camera") stopCamera();
   }, [tab]);
 
+  // One encoder for both the file and the camera paths, so an uploaded laptop
+  // and a photographed one are stored the same way.
+  const encode = fit === "whole" ? toWholeJpeg : toSquareJpeg;
+
   function setResult(blob: Blob | null, source: Tab | null = null) {
     setPreview((old) => {
       if (old) URL.revokeObjectURL(old);
@@ -115,7 +172,7 @@ export default function PhotoCapture({
     setError(null);
     try {
       const bitmap = await createImageBitmap(file);
-      setResult(await toSquareJpeg(bitmap, bitmap.width, bitmap.height), "upload");
+      setResult(await encode(bitmap, bitmap.width, bitmap.height), "upload");
       bitmap.close();
     } catch {
       setError("That file could not be read as an image.");
@@ -161,7 +218,7 @@ export default function PhotoCapture({
     if (!video) return;
     setError(null);
     try {
-      setResult(await toSquareJpeg(video, video.videoWidth, video.videoHeight), "camera");
+      setResult(await encode(video, video.videoWidth, video.videoHeight), "camera");
       stopCamera();
     } catch {
       setError("Could not capture a frame. Try again.");
@@ -213,9 +270,22 @@ export default function PhotoCapture({
         <div className="grid h-28 w-28 shrink-0 place-items-center overflow-hidden rounded-xl border border-line bg-white text-[11px] text-ink-soft">
           {preview ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={preview} alt="Selected" className="h-full w-full object-cover" />
+            <img
+              src={preview}
+              alt="Selected"
+              // The preview must show what was actually stored. In `whole`
+              // mode the blob keeps the full frame, so cover here would crop
+              // it on screen only — reintroducing, as an illusion, the exact
+              // confusion this fix removes.
+              className={`h-full w-full ${fit === "whole" ? "object-contain" : "object-cover"}`}
+            />
           ) : tab === "camera" && cameraOn ? (
-            <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
+            <video
+              ref={videoRef}
+              className={`h-full w-full ${fit === "whole" ? "object-contain" : "object-cover"}`}
+              muted
+              playsInline
+            />
           ) : (
             "No photo"
           )}

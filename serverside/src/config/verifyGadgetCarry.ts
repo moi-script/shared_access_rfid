@@ -5,6 +5,13 @@
  * Requires: `npm run dev` running, and `npm run seed:test` already applied.
  * Run with: npm run verify:gadget-carry
  */
+// Loads .env before installVerifyBypass() reads VERIFY_BYPASS_TOKEN out of
+// process.env. Unlike verifyGates, this harness imports nothing that pulls in
+// config/env.ts (whose top-level dotenv.config() is what populates the token
+// for the others), so without this the bypass silently did nothing — harmless
+// while the suite was short, and a wall of 429s the moment it outgrew the
+// 200-requests-per-minute global limit.
+import 'dotenv/config';
 import { installVerifyBypass } from './verifyBypass';
 
 installVerifyBypass();
@@ -174,20 +181,93 @@ async function main(): Promise<void> {
     const gates = await request(superadmin, 'GET', '/gates');
     const gateRows = (gates.json.data ?? []) as { _id: string; name: string }[];
     const gadgetLane = gateRows.find((g) => g.name === 'Gadget Lane');
+    const mainGate = gateRows.find((g) => g.name === 'Main Entrance');
     const sideGate = gateRows.find((g) => g.name === 'Side Gate');
     expectEqual('Gadget Lane gate exists (run npm run seed)', Boolean(gadgetLane), true);
+    expectEqual('Main Entrance gate exists', Boolean(mainGate), true);
     expectEqual('Side Gate exists', Boolean(sideGate), true);
 
-    // Person in first, then the device — the Gadget Lane flow.
-    const personIn = await request(superadmin, 'POST', '/scan/tap', {
+    /** The lane, in order: every device first, then the ID that commits them. */
+    const carryIn = async (personUid: string, deviceUids: string[]) => {
+      for (const uid of deviceUids) {
+        await request(superadmin, 'POST', '/scan/tap', {
+          rfid_uid: uid, gate_id: gadgetLane!._id, direction: 'entry',
+        });
+      }
+      return request(superadmin, 'POST', '/scan/tap', {
+        rfid_uid: personUid, gate_id: mainGate!._id, direction: 'entry',
+      });
+    };
+
+    // The ORDER is the feature: Gadget Lane, then Main Entrance. A person's own
+    // card at the device reader is a few steps early, not a valid entry.
+    const personAtLane = await request(superadmin, 'POST', '/scan/tap', {
       rfid_uid: hex(1), gate_id: gadgetLane!._id, direction: 'entry',
     });
-    expectEqual('person admitted at the gadget lane', (personIn.json.data as { access_result?: string })?.access_result, 'granted');
+    expectEqual(
+      "a person's ID is refused at the device reader",
+      (personAtLane.json.data as { reason?: string })?.reason,
+      'person_not_allowed_at_gadget_lane'
+    );
 
+    // ...and the mirror image: a device sticker at the person reader names the
+    // right lane rather than falling through to a generic wrong_gate_type.
+    const deviceAtMain = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(2), gate_id: mainGate!._id, direction: 'entry',
+    });
+    const dam = deviceAtMain.json.data as { access_result?: string; reason?: string };
+    expectEqual('a device sticker at the person reader is denied', dam?.access_result, 'denied');
+    expectEqual('and is told which reader to use', dam?.reason, 'gadget_wrong_lane');
+
+    console.log('\n--- a device tap DECLARES; the person tap is what commits it');
     const deviceIn = await request(superadmin, 'POST', '/scan/tap', {
       rfid_uid: hex(2), gate_id: gadgetLane!._id, direction: 'entry',
     });
-    expectEqual('gadget tag admitted', (deviceIn.json.data as { access_result?: string })?.access_result, 'granted');
+    const din = deviceIn.json.data as {
+      access_result?: string;
+      reason?: string;
+      person?: { full_name?: string; photo_url?: string };
+    };
+    expectEqual('gadget tag accepted at the lane', din?.access_result, 'granted');
+    expectEqual('and marked as declared, not admitted', din?.reason, 'carry_pending');
+    // The lane shows the owner beside the device, so the sticker must resolve
+    // its owner's identity on a GRANTED tap — that pairing is the whole check
+    // the guard performs there.
+    expectEqual('the lane is told whose device it is', din?.person?.full_name, `Carry Probe ${RUN}`);
+
+    // The device must NOT be inside yet. This is the property the whole
+    // reordering rests on: a sticker tapped by someone who then walks away is
+    // never recorded as having entered.
+    const pendingProfile = await request(superadmin, 'GET', `/persons/${personId}/overview`);
+    const pendingRows = ((pendingProfile.json.data as { gadgets?: { inside: boolean }[] })?.gadgets ?? []);
+    expectEqual(
+      'a declared device is not inside until the ID taps',
+      pendingRows.filter((g) => g.inside).length,
+      0
+    );
+
+    const personIn = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(1), gate_id: mainGate!._id, direction: 'entry',
+    });
+    const pin = personIn.json.data as {
+      access_result?: string;
+      person?: { gadgets_carried?: { serial_number: string }[] };
+    };
+    expectEqual('person admitted at the person reader', pin?.access_result, 'granted');
+    expectEqual('and the tap reports the device it just walked in', pin?.person?.gadgets_carried?.length, 1);
+    expectEqual(
+      'naming the device that was declared',
+      pin?.person?.gadgets_carried?.[0]?.serial_number,
+      `CPG${RUN}`
+    );
+
+    const committed = await request(superadmin, 'GET', `/persons/${personId}/overview`);
+    const committedRows = ((committed.json.data as { gadgets?: { inside: boolean }[] })?.gadgets ?? []);
+    expectEqual(
+      'and the device is inside once the ID has tapped',
+      committedRows.filter((g) => g.inside).length,
+      1
+    );
 
     console.log('\n--- the exit tap reports what is still inside');
     const personOut = await request(superadmin, 'POST', '/scan/tap', {
@@ -213,8 +293,7 @@ async function main(): Promise<void> {
 
     console.log('\n--- an incomplete exit is logged as its own row, not folded into the exit');
     // Re-enter both so there is something to leave behind.
-    await request(superadmin, 'POST', '/scan/tap', { rfid_uid: hex(1), gate_id: gadgetLane!._id, direction: 'entry' });
-    await request(superadmin, 'POST', '/scan/tap', { rfid_uid: hex(2), gate_id: gadgetLane!._id, direction: 'entry' });
+    await carryIn(hex(1), [hex(2)]);
     const exitAgain = await request(superadmin, 'POST', '/scan/tap', {
       rfid_uid: hex(1), gate_id: sideGate!._id, direction: 'exit',
     });
@@ -237,7 +316,11 @@ async function main(): Promise<void> {
     expectEqual('a gadget_not_returned row was written', notReturned.length >= 1, true);
     expectEqual('and it is GRANTED, never a denial', notReturned[0]?.access_result, 'granted');
 
-    // Clean the device back out so the run leaves no row inside.
+    // Clean the device back out so the run leaves no row inside. The person
+    // taps first: the close call above ENDED the exit permit (that is what it
+    // reports), so a device tapped on its own here is now refused and would be
+    // left stranded inside.
+    await request(superadmin, 'POST', '/scan/tap', { rfid_uid: hex(1), gate_id: sideGate!._id, direction: 'exit' });
     await request(superadmin, 'POST', '/scan/tap', { rfid_uid: hex(2), gate_id: sideGate!._id, direction: 'exit' });
 
     // Last of the gadget-tap checks on purpose: a denied tap moves no
@@ -281,16 +364,21 @@ async function main(): Promise<void> {
       brand_model: 'Stranger Laptop', serial_number: `CSG${RUN}`, rfid_uid: hex(9),
     });
     expectEqual('stranger gadget created', strangerGadget.status, CREATED);
-    // It was never tapped in, so an exit tap must report exit_without_entry
-    // rather than silently releasing a row that does not exist.
+    // This used to assert exit_without_entry. That outcome is no longer
+    // reachable for a device at a person gate, and the reason is the rule
+    // itself rather than a regression: a device tap on the way out is only
+    // considered at all while its owner's exit checklist is open, and that
+    // checklist is built from the devices occupancy says are inside. A device
+    // that never entered can never be on it, so it is turned away one step
+    // earlier — before any occupancy read — which is the fail-closed
+    // direction. exit_without_entry remains reachable for people and vehicles,
+    // which tap out on their own.
     const strangerOut = await request(superadmin, 'POST', '/scan/tap', {
       rfid_uid: hex(9), gate_id: sideGate!._id, direction: 'exit',
     });
-    expectEqual(
-      'a device that never entered reports exit_without_entry',
-      (strangerOut.json.data as { reason?: string })?.reason,
-      'exit_without_entry'
-    );
+    const so = strangerOut.json.data as { access_result?: string; reason?: string };
+    expectEqual('a device that never entered is refused on the way out', so?.access_result, 'denied');
+    expectEqual('for want of an open checklist', so?.reason, 'gadget_requires_person_tap');
     await request(superadmin, 'DELETE', `/persons/${strangerId}`);
 
     console.log('\n--- a blocked gadget tag is refused');
@@ -385,7 +473,10 @@ async function main(): Promise<void> {
 
     const lowerTap = await request(superadmin, 'POST', '/scan/tap', {
       rfid_uid: lowerUid,
-      gate_id: gadgetLane!._id,
+      // The person reader: a person's card is refused at the Gadget Lane now,
+      // so tapping this probe there would assert casing against a denial that
+      // has nothing to do with casing.
+      gate_id: mainGate!._id,
       direction: 'entry',
     });
     const lt = lowerTap.json.data as { access_result?: string; reason?: string };
@@ -400,6 +491,156 @@ async function main(): Promise<void> {
     if (caseProbeId) {
       const delCase = await request(superadmin, 'DELETE', `/persons/${caseProbeId}`);
       expectEqual('lowercase-UID probe cleaned up', delCase.status, OK);
+    }
+
+    console.log('\n--- two people can have devices declared at once');
+    // The defect this replaces: the store that used to gate device taps held
+    // ONE session per gate and let a later call overwrite it, so the moment a
+    // second student tapped a device while the first was still walking to the
+    // person reader, the first student's devices were lost. Buckets are keyed
+    // by person now, so this interleaving — A's device, B's device, then A's
+    // ID, then B's ID — has to work in exactly that order.
+    const other = await request(superadmin, 'POST', '/persons', {
+      full_name: `Carry Second ${RUN}`,
+      type: 'student',
+      id_number: `CS2-${RUN}`,
+      department_section: `CARRY-PROBE-${RUN}`,
+      rfid_uid: hex(5),
+    });
+    expectEqual('second probe person created', other.status, CREATED);
+    const otherId = idOf(other.json);
+    const otherGadget = await request(superadmin, 'POST', '/gadgets', {
+      owner_person_id: otherId,
+      gadget_type: 'tablet',
+      brand_model: 'Second Tablet',
+      serial_number: `CSG2${RUN}`,
+      rfid_uid: hex(6),
+    });
+    expectEqual('second probe gadget created', otherGadget.status, CREATED);
+
+    // A declares, then B declares before A has reached the person reader.
+    await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(7), gate_id: gadgetLane!._id, direction: 'entry',
+    });
+    await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(6), gate_id: gadgetLane!._id, direction: 'entry',
+    });
+
+    const aIn = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(1), gate_id: mainGate!._id, direction: 'entry',
+    });
+    const aCarried = (aIn.json.data as { person?: { gadgets_carried?: { id: string }[] } })
+      ?.person?.gadgets_carried ?? [];
+    expectEqual("A's tap walks in A's device", aCarried.length, 1);
+    expectEqual('and it is A\'s own, not the one B declared in between', aCarried[0]?.id, gadgetId);
+
+    const bIn = await request(superadmin, 'POST', '/scan/tap', {
+      rfid_uid: hex(5), gate_id: mainGate!._id, direction: 'entry',
+    });
+    const bCarried = (bIn.json.data as {
+      access_result?: string;
+      person?: { gadgets_carried?: { serial_number: string }[] };
+    })?.person?.gadgets_carried ?? [];
+    expectEqual('B is admitted after A', (bIn.json.data as { access_result?: string })?.access_result, 'granted');
+    expectEqual("B's device survived A's tap and walks in with B", bCarried.length, 1);
+    expectEqual('and it is B\'s own device', bCarried[0]?.serial_number, `CSG2${RUN}`);
+
+    // Put both back outside so the checks below start from a clean floor.
+    // Person first, then their device: exit still runs on the per-gate session
+    // that a person's own exit tap opens, so a device tapped ahead of its owner
+    // there is refused and would be left stranded inside.
+    for (const pair of [[hex(1), hex(7)], [hex(5), hex(6)]]) {
+      for (const uid of pair) {
+        await request(superadmin, 'POST', '/scan/tap', {
+          rfid_uid: uid, gate_id: sideGate!._id, direction: 'exit',
+        });
+      }
+    }
+    if (otherId) {
+      const delOther = await request(superadmin, 'DELETE', `/persons/${otherId}`);
+      expectEqual('second probe person cleaned up', delOther.status, OK);
+    }
+
+    console.log('\n--- the exit permit ends with the transaction, not with a clock');
+    // The hole this closes: the exit session used to be a standing 60-second
+    // permit that every device tap slid forward, so it outlived the checklist
+    // it was opened for. A device tapped at that reader minutes later — with
+    // its owner long gone, and after the terminal had already filed
+    // gadget_not_returned for it — was still admitted. The session now carries
+    // the ids it is waiting on and closes when they are spent.
+    const sess = await request(superadmin, 'POST', '/persons', {
+      full_name: `Carry Session ${RUN}`,
+      type: 'student',
+      id_number: `CSS-${RUN}`,
+      rfid_uid: hex(10),
+    });
+    expectEqual('session probe person created', sess.status, CREATED);
+    const sessId = idOf(sess.json);
+    const sessA = await request(superadmin, 'POST', '/gadgets', {
+      owner_person_id: sessId, gadget_type: 'laptop',
+      brand_model: 'Session Laptop', serial_number: `CSSA${RUN}`, rfid_uid: hex(11),
+    });
+    const sessB = await request(superadmin, 'POST', '/gadgets', {
+      owner_person_id: sessId, gadget_type: 'tablet',
+      brand_model: 'Session Tablet', serial_number: `CSSB${RUN}`, rfid_uid: hex(12),
+    });
+    expectEqual(
+      'session probe devices created',
+      sessA.status === CREATED && sessB.status === CREATED,
+      true
+    );
+    const sessBId = idOf(sessB.json);
+
+    const exitTap = async (uid: string) => {
+      const r = await request(superadmin, 'POST', '/scan/tap', {
+        rfid_uid: uid, gate_id: sideGate!._id, direction: 'exit',
+      });
+      return (r.json.data as { access_result?: string; reason?: string }) ?? {};
+    };
+
+    // A device tapped with no checklist open at all — the plain case, and the
+    // one the rule is named for.
+    await carryIn(hex(10), [hex(11), hex(12)]);
+    const coldDevice = await exitTap(hex(11));
+    expectEqual('a device tapped before its owner is refused', coldDevice.access_result, 'denied');
+    expectEqual('and told to tap the person first', coldDevice.reason, 'gadget_requires_person_tap');
+
+    // The normal flow still has to work: person, then each device.
+    expectEqual('the owner exits', (await exitTap(hex(10))).access_result, 'granted');
+    expectEqual('the first device follows them out', (await exitTap(hex(11))).access_result, 'granted');
+
+    // The terminal gives up with one device still unticked and files the audit
+    // row. That call must spend the permit, or the screen has declared the
+    // device missing while the reader would still admit it.
+    const spend = await request(superadmin, 'POST', '/scan/gadget-session', {
+      gate_id: sideGate!._id,
+      person_id: sessId,
+      missing_gadget_ids: [sessBId],
+    });
+    expectEqual('the terminal closes the checklist', spend.status, OK);
+    const afterClose = await exitTap(hex(12));
+    expectEqual(
+      'a device tapped after the checklist closed is refused',
+      afterClose.access_result,
+      'denied'
+    );
+    expectEqual('for want of a person tap', afterClose.reason, 'gadget_requires_person_tap');
+
+    // And the other ending: a checklist that completes closes itself, so the
+    // very next device tap needs a fresh person tap rather than riding out the
+    // remainder of the old permit.
+    expectEqual('the owner exits again', (await exitTap(hex(10))).access_result, 'granted');
+    expectEqual('the last owed device is read', (await exitTap(hex(12))).access_result, 'granted');
+    const afterComplete = await exitTap(hex(11));
+    expectEqual(
+      'a device tapped after the last one was read is refused',
+      afterComplete.access_result,
+      'denied'
+    );
+
+    if (sessId) {
+      const delSess = await request(superadmin, 'DELETE', `/persons/${sessId}`);
+      expectEqual('session probe person cleaned up', delSess.status, OK);
     }
 
     console.log('\n--- the profile and the gate agree on what is being carried');
@@ -429,9 +670,7 @@ async function main(): Promise<void> {
     // hex(2) and put it on the blocklist, so a tap with it is denied and moves
     // no occupancy at all. Using it here made every assertion below compare
     // two empty sets and pass for the wrong reason.
-    await request(superadmin, 'POST', '/scan/tap', {
-      rfid_uid: hex(7), gate_id: gadgetLane!._id, direction: 'entry',
-    });
+    await carryIn(hex(1), [hex(7)]);
 
     const during = await profileOf();
     expectEqual(
