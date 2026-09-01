@@ -228,7 +228,7 @@ export default function PersonProfile({
         <ReplaceCardDialog
           personId={personId}
           personName={record.full_name}
-          currentUid={record.rfid_uid}
+          currentUid={record.rfid_uid || null}
           onClose={() => setShowCard(false)}
           onReplaced={() => {
             setShowCard(false);
