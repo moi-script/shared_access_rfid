@@ -9,7 +9,9 @@ export interface AuthUser {
 export interface GateContext {
   gateId: string;
   name: string;
-  type: 'person' | 'vehicle';
+  // Mirrors gates.model.ts, which gained the gadget lane. Narrower here and
+  // authenticate() cannot return the gate it just read.
+  type: 'person' | 'vehicle' | 'gadget';
   direction: 'entry' | 'exit';
   keyPrefix: string;
 }
