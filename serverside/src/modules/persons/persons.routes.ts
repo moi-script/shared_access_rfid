@@ -105,4 +105,8 @@ personRoutes.patch(
 // above and is not something registrar/hr/oss authority should reach.
 personRoutes.delete('/:id', authorize(ROLES.SUPERADMIN), personController.remove);
 personRoutes.post('/:id/restore', authorize(ROLES.SUPERADMIN), personController.restore);
-   personRoutes.delete('/:id/purge', authorize(ROLES.SUPERADMIN), personController.purgeForTesting);
+
+// Erase is the hard-delete, and the only route in the system that frees a
+// blocked card. Same superadmin fence as delete above, for a strictly larger
+// blast radius: this one has no Restore behind it.
+personRoutes.delete('/:id/erase', authorize(ROLES.SUPERADMIN), personController.erase);

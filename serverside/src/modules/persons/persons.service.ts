@@ -15,6 +15,9 @@ import { PersonPhotoModel } from './personPhotos.model';
 import { PersonSignatureModel } from './personSignatures.model';
 import { VehiclePhotoModel } from '../vehicles/vehiclePhotos.model';
 import { GadgetPhotoModel } from '../gadgets/gadgetPhotos.model';
+import { OccupancyModel } from '../occupancy/occupancy.model';
+import { VehicleApplicationModel } from '../vehicleApplications/vehicleApplications.model';
+import { ErasedPersonModel } from './erasedPersons.model';
 
 interface ListQuery {
   page?: string;
@@ -559,31 +562,36 @@ export const personService = {
   },
 
   /**
-   * A genuinely destructive hard-delete, for clearing test data only — this
-   * is NOT the production delete path (that is softDelete, above, and it is
-   * untouched by this method). Where softDelete blocks the person's card
-   * forever by design, this does the opposite on purpose: it removes the
-   * person, every vehicle they ever registered (any status, not just active
-   * — a deactivated test row must not survive to clash with the next run
-   * either), every gadget the same way, and their photo/signature files,
-   * completely from the database. It then clears every blockedCards row tied
-   * to any UID the person, their vehicles, or their gadgets ever carried, so
-   * the same physical card is immediately re-registrable.
+   * A genuinely destructive hard-delete — this is NOT the ordinary delete
+   * path (that is softDelete, above, and it is untouched by this method).
+   * Where softDelete blocks the person's card forever by design, this does
+   * the opposite on purpose: it removes the person, every vehicle they ever
+   * registered (any status, not just active — a deactivated row must not
+   * survive to clash with a re-registration either), every gadget the same
+   * way, and their photo/signature files, completely from the database. It
+   * then clears every blockedCards row tied to any UID the person, their
+   * vehicles, or their gadgets ever carried, so the same physical card is
+   * immediately re-registrable. Cards are a finite physical stock; a
+   * mis-registration must not burn one permanently.
    *
-   * Refused outside a non-production environment — see
-   * blockedCardRepo.purgeByRfid's comment for why that guard matters. This is
-   * the only place in the codebase that undoes a blockedCards entry, and it
-   * must not become reachable from a live deployment.
+   * This runs in production. It is superadmin-only at the route, and this is
+   * the only place in the codebase that undoes a blockedCards entry, so the
+   * erasure records itself in erasedPersons before anything is deleted —
+   * that tombstone is the only surviving trace of who freed which card.
+   *
+   * What it deliberately does NOT delete: scanLog and attendance. The record
+   * that a card passed a gate outlives the holder; those rows keep pointing
+   * at this _id and resolve their name through the tombstone. Occupancy is
+   * the opposite case and IS deleted — it is live state, not history, and an
+   * orphan row there would inflate the inside-count forever and hold a slot
+   * on the unique (entity_type, entity_id) index that backs anti-passback.
    *
    * Uses PersonModel.findById directly rather than personRepo.findById: the
    * repo method excludes soft-deleted rows, and a person already
-   * soft-deleted in an earlier test pass must still be purgeable — otherwise
-   * a superadmin has no way to fully clear them and free their UID for reuse.
+   * soft-deleted must still be erasable — otherwise a superadmin has no way
+   * to fully clear them and free their UID for reuse.
    */
-  async purgeForTesting(id: string, actor: Actor) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new ApiError('FORBIDDEN', 'Test-data purge is disabled in production.');
-    }
+  async erase(id: string, actor: Actor) {
     if (!Types.ObjectId.isValid(id)) throw new ApiError('NOT_FOUND', 'Person not found');
 
     const person = await PersonModel.findById(id);
@@ -607,6 +615,28 @@ export const personService = {
     const vehicleIds = vehicles.map((v) => v._id);
     const gadgetIds = gadgets.map((g) => g._id);
 
+    // The tombstone goes down BEFORE any delete. It is what the surviving
+    // scan logs resolve their name through, and the only record that this
+    // erasure happened at all — so if the cascade below dies halfway, the
+    // evidence of what was attempted, by whom, is already durable.
+    await ErasedPersonModel.updateOne(
+      { _id: person._id },
+      {
+        $set: {
+          full_name: person.full_name,
+          id_number: person.id_number,
+          type: person.type,
+          department_section: person.department_section ?? null,
+          rfid_uids: [...uidsToFree],
+          vehicles_deleted: vehicleIds.length,
+          gadgets_deleted: gadgetIds.length,
+          erased_at: new Date(),
+          erased_by: new Types.ObjectId(String(actor.id)),
+        },
+      },
+      { upsert: true }
+    );
+
     // Leaf records first (photos reference vehicles/gadgets/the person), so a
     // failure partway through never leaves a photo pointing at a row that's
     // already gone.
@@ -620,9 +650,18 @@ export const personService = {
     await VehicleModel.deleteMany({ owner_person_id: person._id });
     await GadgetModel.deleteMany({ owner_person_id: person._id });
 
-    // NOTE: assumes a `deleteById` on userRepo alongside its existing
-    // `updateById` / `findByPersonId` — I still haven't seen
-    // users.repository.ts, so double-check this method actually exists there.
+    // Live state, not history: an occupancy row left pointing at a deleted
+    // entity would count toward "currently inside" forever, and no tap can
+    // ever clear it because the card that would release it is now free to
+    // belong to somebody else. Their equipment goes too — a vehicle parked
+    // inside is just as stuck once its row is gone.
+    await OccupancyModel.deleteMany({
+      entity_id: { $in: [person._id, ...vehicleIds, ...gadgetIds] },
+    });
+
+    // The person's own submissions, not a record of them passing a gate.
+    await VehicleApplicationModel.deleteMany({ owner_person_id: person._id });
+
     const login = await userRepo.findByPersonId(id);
     if (login) await userRepo.deleteById(String(login._id));
 
@@ -632,9 +671,10 @@ export const personService = {
 
     return {
       id,
-      purged: true,
+      erased: true,
       vehiclesDeleted: vehicleIds.length,
       gadgetsDeleted: gadgetIds.length,
+      cardsFreed: [...uidsToFree],
     };
   },
 };

@@ -16,6 +16,7 @@ interface ListQuery {
   limit?: string;
   status?: string;
   vehicle_type?: string;
+  owner_person_id?: string;
   search?: string;
 }
 
@@ -93,6 +94,12 @@ export const vehicleService = {
     const filter: FilterQuery<IVehicle> = {};
     if (query.status) filter.status = query.status;
     if (query.vehicle_type) filter.vehicle_type = query.vehicle_type;
+    // Mirrors the same filter on GET /gadgets. Without it this parameter was
+    // accepted and silently ignored, so ErasePersonDialog's "N vehicles will
+    // be deleted" preview counted every vehicle in the system rather than
+    // this owner's — the one number an operator reads before confirming an
+    // irreversible delete.
+    if (query.owner_person_id) filter.owner_person_id = query.owner_person_id;
     if (query.search) {
       // Plate and sticker UID only. Owner name is not searchable here: it would
       // need a $lookup pipeline, and the directory already answers "what does

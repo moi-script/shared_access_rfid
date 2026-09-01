@@ -129,6 +129,17 @@ export const reportService = {
       // already_inside rows already MATCH above — they just rendered nameless,
       // which is worse than absent: a nameless anomaly row cannot be acted on.
       { $lookup: { from: 'gadgets', localField: 'entity_id', foreignField: '_id', as: 'gadget' } },
+      // Erasing a person leaves their scan logs behind on purpose, pointing at
+      // an _id that no longer resolves above. The tombstone is keyed by that
+      // same _id, so it is the last link in the name chain below.
+      {
+        $lookup: {
+          from: 'erasedpersons',
+          localField: 'entity_id',
+          foreignField: '_id',
+          as: 'erased',
+        },
+      },
       { $lookup: { from: 'gates', localField: 'gate_id', foreignField: '_id', as: 'gate' } },
       { $lookup: { from: 'users', localField: 'actor_user_id', foreignField: '_id', as: 'actor' } },
       {
@@ -150,7 +161,26 @@ export const reportService = {
               {
                 $ifNull: [
                   { $arrayElemAt: ['$vehicle.plate_number', 0] },
-                  { $arrayElemAt: ['$gadget.brand_model', 0] },
+                  {
+                    $ifNull: [
+                      { $arrayElemAt: ['$gadget.brand_model', 0] },
+                      // Suffixed, not bare: a row whose subject no longer
+                      // exists must not read as though they were still
+                      // registered when someone acts on it.
+                      {
+                        $let: {
+                          vars: { e: { $arrayElemAt: ['$erased.full_name', 0] } },
+                          in: {
+                            $cond: [
+                              { $ifNull: ['$$e', false] },
+                              { $concat: ['$$e', ' (erased)'] },
+                              null,
+                            ],
+                          },
+                        },
+                      },
+                    ],
+                  },
                 ],
               },
             ],

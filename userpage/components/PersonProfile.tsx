@@ -7,7 +7,7 @@ import RegistrationForm, { type PersonRecord } from "@/components/RegistrationFo
 // Unused while the profile's Delete button is commented out; the component file
 // itself is left in place.
 // import DeletePersonDialog from "@/components/DeletePersonDialog";
-import PurgePersonDialog from "@/components/PurgePersonDialog";
+import ErasePersonDialog from "@/components/ErasePersonDialog";
 import GadgetForm from "@/components/gadgets/GadgetForm";
 import GadgetEditForm, { type EditableGadget } from "@/components/gadgets/GadgetEditForm";
 import VehicleEditForm, { type EditableVehicle } from "@/components/vehicles/VehicleEditForm";
@@ -51,14 +51,13 @@ export default function PersonProfile({
   // fetch — mirrors tagTarget below.
   const [editGadget, setEditGadget] = useState<EditableGadget | null>(null);
   const [editVehicle, setEditVehicle] = useState<EditableVehicle | null>(null);
-  const [showPurge, setShowPurge] = useState(false);
+  const [showErase, setShowErase] = useState(false);
   const myRole = (getStoredUser()?.role ?? "staff") as Role;
   const canGadget = canRegisterGadgets(myRole);
-  // Purge is superadmin-only in the UI; the server enforces this regardless
-  // (personRoutes.delete('/:id/purge', authorize(ROLES.SUPERADMIN)) and, on
-  // top of that, refuses outside a non-production environment). This is a
-  // separate flag from the commented-out Delete button's isSuperadmin above,
-  // kept live because purge is a live, independent feature.
+  // Erase is superadmin-only in the UI; the server enforces this regardless
+  // (personRoutes.delete('/:id/erase', authorize(ROLES.SUPERADMIN))). This is
+  // a separate flag from the commented-out Delete button's isSuperadmin
+  // above, kept live because erase is a live, independent feature.
   const isSuperadmin = myRole === "superadmin";
   // The row whose sticker is being swapped, or null. Holds the whole target
   // rather than an id: the dialog shows the plate/model and the current tag,
@@ -141,14 +140,14 @@ export default function PersonProfile({
               </button>
             )}
             */}
-            {/* Purge — testing-only hard delete, separate from Delete above.
-                See PurgePersonDialog's own header comment. Live (not
-                commented out): unlike Delete this was never removed by
-                request, and the server's own environment check is the real
-                gate against it reaching production regardless of this UI. */}
+            {/* Erase — the hard delete, separate from Delete above. See
+                ErasePersonDialog's own header comment. This runs in
+                production: the real gate is the superadmin-only route plus
+                the typed-name confirmation in the dialog, not this button
+                being hard to find. */}
             {isSuperadmin && (
               <button
-                onClick={() => setShowPurge(true)}
+                onClick={() => setShowErase(true)}
                 className="rounded-xl border-2 border-red bg-white px-3 py-1.5 text-[13px] font-600 text-ink hover:bg-red/25 hover:text-ink"
               >
                 Erase Data
@@ -263,14 +262,14 @@ export default function PersonProfile({
       )}
       */}
 
-      {showPurge && record && (
-        <PurgePersonDialog
+      {showErase && record && (
+        <ErasePersonDialog
           personId={personId}
           personName={record.full_name}
           rfidUid={record.rfid_uid || null}
-          onClose={() => setShowPurge(false)}
+          onClose={() => setShowErase(false)}
           onPurged={() => {
-            setShowPurge(false);
+            setShowErase(false);
             onBack();
           }}
         />

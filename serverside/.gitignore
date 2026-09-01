@@ -6,3 +6,7 @@ dist/
 .env.bak-*
 .gate-keys.local.txt
 *.log
+
+# Superseded snippet drafts kept out of the TS program (they carry syntax
+# errors and make tsc skip the semantic pass for the whole build).
+scratch/
