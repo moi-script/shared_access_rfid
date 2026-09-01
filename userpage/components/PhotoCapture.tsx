@@ -259,6 +259,15 @@ export default function PhotoCapture({
     if (tab !== "camera") stopCamera();
   }, [tab]);
 
+  // Only inputs the browser has actually named can be picked: until camera
+  // permission has been granted once, enumerateDevices returns placeholder
+  // entries whose deviceId is "", and an option carrying an empty value can
+  // neither be selected nor passed to getUserMedia. Showing the picker as
+  // soon as ONE real camera is known — rather than only when two or more are
+  // — is deliberate: a desk PC whose sole camera is the USB webcam still
+  // needs to see, and confirm, which camera the capture will use.
+  const namedDevices = devices.filter((d) => d.deviceId);
+
   // One encoder for both the file and the camera paths, so an uploaded laptop
   // and a photographed one are stored the same way.
   const encode = fit === "whole" ? toWholeJpeg : toSquareJpeg;
@@ -333,6 +342,27 @@ export default function PhotoCapture({
     } catch (err) {
       setError(describeCameraError(err));
     }
+  }
+
+  /**
+   * Rebuilds the camera list on demand. Two things make an explicit control
+   * worth having: a webcam plugged in after the page loaded is not always
+   * announced by a `devicechange` event, and the list stays anonymous (blank
+   * ids, blank labels) until camera permission has been granted once — so
+   * when nothing nameable is known yet this opens a throwaway stream purely
+   * to unlock the names, then releases it immediately.
+   */
+  async function rescanDevices() {
+    setError(null);
+    if (namedDevices.length === 0 && cameraSupported && !streamRef.current) {
+      try {
+        const probe = await navigator.mediaDevices.getUserMedia({ video: true });
+        probe.getTracks().forEach((t) => t.stop());
+      } catch (err) {
+        setError(describeCameraError(err));
+      }
+    }
+    await refreshDevices();
   }
 
   /** Switches cameras, restarting the preview in place if one is running. */
@@ -458,6 +488,17 @@ export default function PhotoCapture({
                 >
                   {preview && capturedFrom === "camera" ? "Retake" : "Turn on camera"}
                 </button>
+              ) : null}
+              {!cameraOn ? (
+                <button
+                  key="rescan"
+                  type="button"
+                  onClick={() => void rescanDevices()}
+                  className="rounded-lg border border-line bg-white px-3 py-1.5 text-[13px] font-600 text-ink-soft hover:text-navy"
+                  title="Look for cameras again — use after plugging in a USB camera"
+                >
+                  Rescan
+                </button>
               ) : (
                 <>
                   <button
@@ -479,7 +520,7 @@ export default function PhotoCapture({
             </div>
           )}
 
-          {tab === "camera" && devices.length > 1 && (
+          {tab === "camera" && namedDevices.length > 0 && (
             <select
               value={deviceId ?? ""}
               onChange={(e) => void selectDevice(e.target.value)}
@@ -487,7 +528,7 @@ export default function PhotoCapture({
               aria-label="Camera"
             >
               {!deviceId && <option value="">Choose a camera</option>}
-              {devices.map((d, i) => (
+              {namedDevices.map((d, i) => (
                 <option key={d.deviceId || i} value={d.deviceId}>
                   {/* Unlabelled inputs are the norm until permission has been
                       granted once; a position is still enough to tell two
@@ -498,9 +539,15 @@ export default function PhotoCapture({
             </select>
           )}
 
-          {tab === "camera" && !cameraOn && devices.length === 0 && (
+          {tab === "camera" && !cameraOn && namedDevices.length === 0 && (
             <p className="max-w-56 text-[11px] text-ink-soft">
-              No camera detected. Plug in a USB camera, then press Turn on camera.
+              {devices.length === 0
+                ? "No camera detected. Plug in a USB camera, then press Rescan."
+                : // Cameras exist but the browser is still withholding their
+                  // names, which it does until the camera has been allowed
+                  // once. Rescan asks for that permission, after which the
+                  // picker can name them.
+                  "Press Rescan to list the cameras on this PC."}
             </p>
           )}
 
