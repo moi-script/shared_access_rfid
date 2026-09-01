@@ -5,18 +5,23 @@ import { apiDelete, apiGetList } from "@/lib/auth";
 import Notice from "@/components/Notice";
 
 /**
- * Test-data-only. This is NOT DeletePersonDialog's cascade — that one
+ * The hard delete. This is NOT DeletePersonDialog's cascade — that one
  * deactivates vehicles, blocks the card forever, and can be undone with
- * Restore. This one calls DELETE /persons/:id/purge, which hard-deletes the
- * person, every vehicle and gadget they ever registered (any status), and
- * frees any RFID UID they held for immediate reuse. There is no restore.
- * The server itself refuses this outside a non-production environment, so
- * the worst this dialog can do in prod is surface that refusal.
+ * Restore. This one calls DELETE /persons/:id/erase, which removes the
+ * person, every vehicle and gadget they ever registered (any status), their
+ * photos and signature and login, and frees every RFID UID they held for
+ * immediate reuse. There is no restore.
+ *
+ * It runs in production — superadmin-only at the route, and the typed-name
+ * confirmation below is the second gate. What it does NOT remove is their
+ * gate history: those scan logs stay, and keep reading with their name
+ * (marked erased) via the server's erasedPersons tombstone, which also
+ * records who erased them and which cards that freed.
  *
  * Kept as its own component rather than a prop on DeletePersonDialog so the
  * two actions can never be reached through the same button by accident.
  */
-export default function PurgePersonDialog({
+export default function ErasePersonDialog({
   personId,
   personName,
   rfidUid,
@@ -66,7 +71,7 @@ export default function PurgePersonDialog({
     setError(null);
     setPurging(true);
     try {
-      await apiDelete(`/persons/${personId}/purge`);
+      await apiDelete(`/persons/${personId}/erase`);
       onPurged();
     } catch (err) {
       setError((err as Error).message);
@@ -82,7 +87,7 @@ export default function PurgePersonDialog({
       <div className="mx-auto w-full max-w-md space-y-3 rounded-2xl border-2 border-red bg-white p-6">
         <div className="flex items-center justify-between">
           <h2 className="font-display text-xl font-700 tracking-tight text-ink">
-            Permanently erase (test data)
+            Permanently erase
           </h2>
           <button
             type="button"
@@ -98,8 +103,8 @@ export default function PurgePersonDialog({
         </p>
 
         <Notice className="text-[13px] font-600 text-ink">
-          This is not the normal Delete. It hard-deletes this person from the
-          database — not a soft delete, no Restore afterward.
+          This is not the normal Delete. It removes this person from the
+          database for good — not a soft delete, no Restore afterward.
         </Notice>
 
         {loadingImpact ? (
@@ -130,6 +135,14 @@ export default function PurgePersonDialog({
             )}
           </ul>
         )}
+
+        {/* Stated as plainly as the deletions above it: an operator deciding
+            whether to erase is also deciding what evidence remains, and the
+            answer here is "all of it". */}
+        <p className="rounded-xl bg-paper px-4 py-3 text-[13px] text-ink-soft">
+          Their gate history is <span className="font-600 text-ink">kept</span>. Past entries and
+          exits stay in Records, still under their name, marked erased.
+        </p>
 
         {error && (
           <Notice compact className="text-[13px] text-ink">

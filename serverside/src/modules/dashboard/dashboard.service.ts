@@ -77,6 +77,16 @@ async function recentScans(limit: number) {
     // volume, so without this join the 8-row live feed fills with nameless
     // rows and stops being a feed of anything.
     { $lookup: { from: 'gadgets', localField: 'entity_id', foreignField: '_id', as: 'gadget' } },
+    // An erased person's taps stay in the feed until they age out of it; the
+    // tombstone is keyed by the same _id the person row used to have.
+    {
+      $lookup: {
+        from: 'erasedpersons',
+        localField: 'entity_id',
+        foreignField: '_id',
+        as: 'erased',
+      },
+    },
     {
       $project: {
         _id: 0,
@@ -93,7 +103,23 @@ async function recentScans(limit: number) {
         name: {
           $ifNull: [
             { $arrayElemAt: ['$person.full_name', 0] },
-            { $arrayElemAt: ['$gadget.brand_model', 0] },
+            {
+              $ifNull: [
+                { $arrayElemAt: ['$gadget.brand_model', 0] },
+                {
+                  $let: {
+                    vars: { e: { $arrayElemAt: ['$erased.full_name', 0] } },
+                    in: {
+                      $cond: [
+                        { $ifNull: ['$$e', false] },
+                        { $concat: ['$$e', ' (erased)'] },
+                        null,
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
           ],
         },
       },

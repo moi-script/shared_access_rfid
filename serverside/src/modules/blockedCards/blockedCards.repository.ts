@@ -25,14 +25,15 @@ export const blockedCardRepo = {
   /**
    * The sole exception to "rows here are never removed by application code"
    * (see the model's own docstring, and `block`'s comment above it). Reached
-   * only from personService.purgeForTesting, which is itself refused outside
-   * a non-production environment before this is ever called — that guard is
-   * what keeps the blockedCards ruling intact for real deployments, not
-   * anything in this method.
+   * only from personService.erase, which runs in production and is fenced at
+   * its route to superadmin. What keeps the blockedCards ruling intact is
+   * that erase is the single caller and records itself in erasedPersons
+   * first — nothing in this method is a guard, so do not add a second caller
+   * without deciding how the unblock gets attributed.
    *
    * Deletes every block row for this UID, not just one — a card that was
-   * already blocked by an earlier soft-delete or card-replace in the same
-   * test run must come back fully usable, not just partially.
+   * already blocked by an earlier soft-delete or card-replace must come back
+   * fully usable, not just partially.
    */
   purgeByRfid: (rfid_uid: string) => BlockedCardModel.deleteMany({ rfid_uid }),
 };
