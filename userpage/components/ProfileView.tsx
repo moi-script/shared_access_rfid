@@ -7,7 +7,6 @@ import {
   TfiPulse,
   TfiAgenda,
   TfiTime,
-  TfiTimer,
 } from "react-icons/tfi";
 import AuthedImage, { PersonAvatar } from "@/components/AuthedImage";
 import Notice from "@/components/Notice";
@@ -136,7 +135,11 @@ function EntityThumb({
         <AuthedImage
           path={path}
           alt={alt}
-          className="h-full w-full object-cover"
+          // contain: vehicle and gadget photos are stored whole (PhotoCapture's
+          // `whole` fit), and this thumbnail is landscape while the photos are
+          // any shape at all. Filling it would crop them a second time on
+          // screen, which is what made the saved photo look cropped.
+          className="h-full w-full object-contain"
           fallback={<Icon aria-hidden className="h-6 w-6" />}
         />
       ) : (
@@ -238,9 +241,14 @@ export default function ProfileView({
       </section>
 
       {/* Attendance summary */}
-      <section className="grid grid-cols-3 gap-4">
+      {/* Present and absent only. The Late tile was removed from the profile:
+          the summary here answers "has this person been showing up", and a
+          third count split off the present one made that harder to read at a
+          glance rather than easier. `attendance_summary.late` still arrives
+          from the server and is still what the reports screen totals — this is
+          a display decision on one screen, not a change to what is recorded. */}
+      <section className="grid grid-cols-2 gap-4">
         <StatTile label="Present" value={data.attendance_summary.present} icon={TfiCheckBox} />
-        <StatTile label="Late" value={data.attendance_summary.late} icon={TfiTimer} />
         <StatTile label="Absent" value={data.attendance_summary.absent} icon={TfiNa} />
       </section>
 

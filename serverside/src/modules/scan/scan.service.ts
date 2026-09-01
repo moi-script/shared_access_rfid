@@ -63,6 +63,12 @@ interface TapResult {
       gadget_type: string;
       brand_model: string;
       serial_number: string;
+      /** Carried here so the exit checklist can SHOW the device it is asking
+       *  for. This used to be withheld on the theory that the lane confirms a
+       *  device once it is read back rather than previewing it — but the guard
+       *  is being asked to find a specific laptop among several in a bag, and
+       *  a line of text is a worse description of it than its photograph. */
+      photo_url?: string;
     }[];
     /** The devices this person had parked at the Gadget Lane and that THIS tap
      *  just walked inside — see the commit block below. Populated only on a
@@ -259,7 +265,11 @@ export const scanService = {
               } else if (gadget.status === 'active') {
                 access_result = 'granted';
                 reason = null;
-                gateSessionStore.touch(String(gate._id));
+                // Ticks this device off the checklist. When it was the last one
+                // owed, the session closes here rather than lingering on its
+                // clock — the next device tapped at this reader then needs a
+                // fresh person tap, which is the whole rule.
+                gateSessionStore.settle(String(gate._id), String(gadget._id));
               } else {
                 access_result = 'denied';
                 reason = 'inactive_id';
@@ -397,6 +407,7 @@ export const scanService = {
             gadget_type: g.gadget_type,
             brand_model: g.brand_model,
             serial_number: g.serial_number,
+            photo_url: g.photo_url,
           }));
       }
 
@@ -450,7 +461,13 @@ export const scanService = {
           }));
         }
       } else if (input.direction === 'exit' && (personView.gadgets_inside?.length ?? 0) > 0) {
-        gateSessionStore.open(String(gate._id), String(entity_id));
+        // Seeded with the exact devices this exit is owed, so the session ends
+        // when they have all been read instead of when the clock runs out.
+        gateSessionStore.open(
+          String(gate._id),
+          String(entity_id),
+          personView.gadgets_inside!.map((g) => g.id)
+        );
       }
     }
 
@@ -506,6 +523,12 @@ export const scanService = {
     }
     const person = await personRepo.findById(input.person_id);
     if (!person) throw new ApiError('NOT_FOUND', 'Person not found');
+
+    // The terminal has given up on this checklist, so the permit it was
+    // running under is spent. Closed BEFORE the audit row is written: the
+    // write can fail, and a session left open by a failed log is precisely the
+    // standing permit this endpoint is reporting the end of.
+    gateSessionStore.close(String(gate._id));
 
     await scanRepo.createLog({
       rfid_uid: person.rfid_uid ?? '',

@@ -370,7 +370,7 @@ export default function GadgetForm({
           />
         </label>
 
-        <PhotoCapture onChange={setPhoto} />
+        <PhotoCapture onChange={setPhoto} fit="whole" />
 
         <p className="text-[12px] text-ink-soft">
           {!Number.isFinite(limit)

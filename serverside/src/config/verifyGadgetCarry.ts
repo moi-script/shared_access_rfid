@@ -5,6 +5,13 @@
  * Requires: `npm run dev` running, and `npm run seed:test` already applied.
  * Run with: npm run verify:gadget-carry
  */
+// Loads .env before installVerifyBypass() reads VERIFY_BYPASS_TOKEN out of
+// process.env. Unlike verifyGates, this harness imports nothing that pulls in
+// config/env.ts (whose top-level dotenv.config() is what populates the token
+// for the others), so without this the bypass silently did nothing — harmless
+// while the suite was short, and a wall of 429s the moment it outgrew the
+// 200-requests-per-minute global limit.
+import 'dotenv/config';
 import { installVerifyBypass } from './verifyBypass';
 
 installVerifyBypass();
@@ -309,7 +316,11 @@ async function main(): Promise<void> {
     expectEqual('a gadget_not_returned row was written', notReturned.length >= 1, true);
     expectEqual('and it is GRANTED, never a denial', notReturned[0]?.access_result, 'granted');
 
-    // Clean the device back out so the run leaves no row inside.
+    // Clean the device back out so the run leaves no row inside. The person
+    // taps first: the close call above ENDED the exit permit (that is what it
+    // reports), so a device tapped on its own here is now refused and would be
+    // left stranded inside.
+    await request(superadmin, 'POST', '/scan/tap', { rfid_uid: hex(1), gate_id: sideGate!._id, direction: 'exit' });
     await request(superadmin, 'POST', '/scan/tap', { rfid_uid: hex(2), gate_id: sideGate!._id, direction: 'exit' });
 
     // Last of the gadget-tap checks on purpose: a denied tap moves no
@@ -353,16 +364,21 @@ async function main(): Promise<void> {
       brand_model: 'Stranger Laptop', serial_number: `CSG${RUN}`, rfid_uid: hex(9),
     });
     expectEqual('stranger gadget created', strangerGadget.status, CREATED);
-    // It was never tapped in, so an exit tap must report exit_without_entry
-    // rather than silently releasing a row that does not exist.
+    // This used to assert exit_without_entry. That outcome is no longer
+    // reachable for a device at a person gate, and the reason is the rule
+    // itself rather than a regression: a device tap on the way out is only
+    // considered at all while its owner's exit checklist is open, and that
+    // checklist is built from the devices occupancy says are inside. A device
+    // that never entered can never be on it, so it is turned away one step
+    // earlier — before any occupancy read — which is the fail-closed
+    // direction. exit_without_entry remains reachable for people and vehicles,
+    // which tap out on their own.
     const strangerOut = await request(superadmin, 'POST', '/scan/tap', {
       rfid_uid: hex(9), gate_id: sideGate!._id, direction: 'exit',
     });
-    expectEqual(
-      'a device that never entered reports exit_without_entry',
-      (strangerOut.json.data as { reason?: string })?.reason,
-      'exit_without_entry'
-    );
+    const so = strangerOut.json.data as { access_result?: string; reason?: string };
+    expectEqual('a device that never entered is refused on the way out', so?.access_result, 'denied');
+    expectEqual('for want of an open checklist', so?.reason, 'gadget_requires_person_tap');
     await request(superadmin, 'DELETE', `/persons/${strangerId}`);
 
     console.log('\n--- a blocked gadget tag is refused');
@@ -543,6 +559,88 @@ async function main(): Promise<void> {
     if (otherId) {
       const delOther = await request(superadmin, 'DELETE', `/persons/${otherId}`);
       expectEqual('second probe person cleaned up', delOther.status, OK);
+    }
+
+    console.log('\n--- the exit permit ends with the transaction, not with a clock');
+    // The hole this closes: the exit session used to be a standing 60-second
+    // permit that every device tap slid forward, so it outlived the checklist
+    // it was opened for. A device tapped at that reader minutes later — with
+    // its owner long gone, and after the terminal had already filed
+    // gadget_not_returned for it — was still admitted. The session now carries
+    // the ids it is waiting on and closes when they are spent.
+    const sess = await request(superadmin, 'POST', '/persons', {
+      full_name: `Carry Session ${RUN}`,
+      type: 'student',
+      id_number: `CSS-${RUN}`,
+      rfid_uid: hex(10),
+    });
+    expectEqual('session probe person created', sess.status, CREATED);
+    const sessId = idOf(sess.json);
+    const sessA = await request(superadmin, 'POST', '/gadgets', {
+      owner_person_id: sessId, gadget_type: 'laptop',
+      brand_model: 'Session Laptop', serial_number: `CSSA${RUN}`, rfid_uid: hex(11),
+    });
+    const sessB = await request(superadmin, 'POST', '/gadgets', {
+      owner_person_id: sessId, gadget_type: 'tablet',
+      brand_model: 'Session Tablet', serial_number: `CSSB${RUN}`, rfid_uid: hex(12),
+    });
+    expectEqual(
+      'session probe devices created',
+      sessA.status === CREATED && sessB.status === CREATED,
+      true
+    );
+    const sessBId = idOf(sessB.json);
+
+    const exitTap = async (uid: string) => {
+      const r = await request(superadmin, 'POST', '/scan/tap', {
+        rfid_uid: uid, gate_id: sideGate!._id, direction: 'exit',
+      });
+      return (r.json.data as { access_result?: string; reason?: string }) ?? {};
+    };
+
+    // A device tapped with no checklist open at all — the plain case, and the
+    // one the rule is named for.
+    await carryIn(hex(10), [hex(11), hex(12)]);
+    const coldDevice = await exitTap(hex(11));
+    expectEqual('a device tapped before its owner is refused', coldDevice.access_result, 'denied');
+    expectEqual('and told to tap the person first', coldDevice.reason, 'gadget_requires_person_tap');
+
+    // The normal flow still has to work: person, then each device.
+    expectEqual('the owner exits', (await exitTap(hex(10))).access_result, 'granted');
+    expectEqual('the first device follows them out', (await exitTap(hex(11))).access_result, 'granted');
+
+    // The terminal gives up with one device still unticked and files the audit
+    // row. That call must spend the permit, or the screen has declared the
+    // device missing while the reader would still admit it.
+    const spend = await request(superadmin, 'POST', '/scan/gadget-session', {
+      gate_id: sideGate!._id,
+      person_id: sessId,
+      missing_gadget_ids: [sessBId],
+    });
+    expectEqual('the terminal closes the checklist', spend.status, OK);
+    const afterClose = await exitTap(hex(12));
+    expectEqual(
+      'a device tapped after the checklist closed is refused',
+      afterClose.access_result,
+      'denied'
+    );
+    expectEqual('for want of a person tap', afterClose.reason, 'gadget_requires_person_tap');
+
+    // And the other ending: a checklist that completes closes itself, so the
+    // very next device tap needs a fresh person tap rather than riding out the
+    // remainder of the old permit.
+    expectEqual('the owner exits again', (await exitTap(hex(10))).access_result, 'granted');
+    expectEqual('the last owed device is read', (await exitTap(hex(12))).access_result, 'granted');
+    const afterComplete = await exitTap(hex(11));
+    expectEqual(
+      'a device tapped after the last one was read is refused',
+      afterComplete.access_result,
+      'denied'
+    );
+
+    if (sessId) {
+      const delSess = await request(superadmin, 'DELETE', `/persons/${sessId}`);
+      expectEqual('session probe person cleaned up', delSess.status, OK);
     }
 
     console.log('\n--- the profile and the gate agree on what is being carried');

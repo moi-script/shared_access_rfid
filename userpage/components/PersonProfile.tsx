@@ -151,7 +151,7 @@ export default function PersonProfile({
                 onClick={() => setShowPurge(true)}
                 className="rounded-xl border-2 border-red bg-white px-3 py-1.5 text-[13px] font-600 text-ink hover:bg-red/25 hover:text-ink"
               >
-                Erase (test data)
+                Erase Data
               </button>
             )}
           </div>

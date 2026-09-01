@@ -872,7 +872,7 @@ export default function VehicleApplicationForm({
                 </div>
               </div>
             ) : (
-              <PhotoCapture onChange={setVehiclePhoto} />
+              <PhotoCapture onChange={setVehiclePhoto} fit="whole" />
             )}
           </div>
         </div>

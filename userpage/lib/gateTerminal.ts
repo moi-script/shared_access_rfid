@@ -116,12 +116,15 @@ export interface TapDecision {
       serial_number: string;
       photo_url?: string;
     }[];
-    /** Devices still inside, returned only on a granted person EXIT tap. */
+    /** Devices still inside, returned only on a granted person EXIT tap.
+     *  Carries `photo_url` so the exit checklist can show each device it is
+     *  asking the guard to find, before it has been tapped. */
     gadgets_inside?: {
       id: string;
       gadget_type: string;
       brand_model: string;
       serial_number: string;
+      photo_url?: string;
     }[];
     /** The devices this person declared at the Gadget Lane that THIS tap just
      *  walked inside. Granted person ENTRY at Main Entrance only, and absent

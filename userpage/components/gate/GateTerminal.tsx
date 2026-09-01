@@ -65,7 +65,11 @@ function VehicleImage({ path, gateKey }: { path?: string; gateKey: string }) {
     <AuthedImage
       path={path}
       alt="Registered vehicle"
-      className="h-full w-full object-cover"
+      // contain, not cover: the photo is stored as the whole frame the
+      // registrar shot (see PhotoCapture's `whole` fit), and a plate sits low
+      // and wide in it. Cropping to fill this box would hide the one detail
+      // the guard is comparing against the car in front of them.
+      className="h-full w-full object-contain"
       headers={{ "X-Gate-Key": gateKey }}
       fallback={placeholder}
     />
@@ -81,7 +85,8 @@ function GadgetImage({ path, gateKey }: { path?: string; gateKey: string }) {
     <AuthedImage
       path={path}
       alt="Registered device"
-      className="h-full w-full object-cover"
+      // contain, for the same reason as the vehicle frame above.
+      className="h-full w-full object-contain"
       headers={{ "X-Gate-Key": gateKey }}
       fallback={placeholder}
     />
@@ -166,14 +171,15 @@ function DevicePromptPanel({
       </h1>
       <div className="mx-auto mt-6 max-w-xl space-y-3 text-left">
         {prompt.expected.map((g) => {
-          // `g` comes from gadgets_inside, which the server deliberately sends
-          // without a photo_url (see scan.service.ts) — the exit lane is meant
-          // to confirm a device once it is actually read back, not to preview
-          // it in advance. The photo only exists once the matching tap has
-          // landed in `seen`, which carries the full gadget row (photo_url
-          // included).
+          // `g` comes from gadgets_inside, which now carries photo_url, so the
+          // line shows the device the guard is being asked to find rather than
+          // an empty box that only fills in after they have already found it.
+          // The seen row's photo is still preferred when present: it is the
+          // one the reader just confirmed, so on the off chance the two ever
+          // disagree, the screen shows what was actually tapped.
           const seenMatch = prompt.seen.find((s) => s.id === g.id);
           const ticked = Boolean(seenMatch);
+          const photo = seenMatch?.photo_url ?? g.photo_url;
           return (
             <div
               key={g.id}
@@ -181,8 +187,16 @@ function DevicePromptPanel({
                 ticked ? "bg-current/15" : "bg-current/5"
               }`}
             >
-              <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-xl bg-current/15">
-                <GadgetImage path={seenMatch?.photo_url} gateKey={gateKey} />
+              {/* Dimmed until the device is actually read: now that every
+                  line shows a photo from the moment the checklist opens, the
+                  picture alone no longer says which ones are still outstanding
+                  — the tick and this contrast do. */}
+              <div
+                className={`grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-xl bg-current/15 ${
+                  ticked ? "" : "opacity-55"
+                }`}
+              >
+                <GadgetImage path={photo} gateKey={gateKey} />
               </div>
               <div
                 className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-lg font-700 ${
