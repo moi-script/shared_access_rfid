@@ -123,6 +123,17 @@ export interface TapDecision {
       brand_model: string;
       serial_number: string;
     }[];
+    /** The devices this person declared at the Gadget Lane that THIS tap just
+     *  walked inside. Granted person ENTRY at Main Entrance only, and absent
+     *  (never empty) when they were carrying nothing — which is why the
+     *  terminal can branch on its mere presence. */
+    gadgets_carried?: {
+      id: string;
+      gadget_type: string;
+      brand_model: string;
+      serial_number: string;
+      photo_url?: string;
+    }[];
   };
   rfid_uid: string;
 }

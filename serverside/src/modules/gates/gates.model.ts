@@ -3,14 +3,14 @@ import { Schema, model, Document, Types } from 'mongoose';
 export interface IGate extends Document {
   _id: Types.ObjectId;
   name: string;
-  type: 'person' | 'vehicle';
+  type: 'person' | 'vehicle' | 'gadget';
   direction: 'entry' | 'exit';
   location: string;
 }
 
 const gateSchema = new Schema<IGate>({
   name: { type: String, required: true, unique: true },
-  type: { type: String, enum: ['person', 'vehicle'], required: true },
+  type: { type: String, enum: ['person', 'vehicle', 'gadget'], required: true },
   direction: { type: String, enum: ['entry', 'exit'], required: true },
   location: { type: String },
 });
