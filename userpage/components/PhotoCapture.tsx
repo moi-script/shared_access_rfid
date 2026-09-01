@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Notice from "@/components/Notice";
 
 const SIZE = 400;
@@ -11,6 +11,46 @@ const MAX_EDGE = 800;
 const QUALITY = 0.82;
 
 type Tab = "upload" | "camera";
+
+/** Where the operator's chosen camera is remembered. A registration desk uses
+ *  the same USB webcam every shift, and re-picking it out of a list on every
+ *  visit is pure friction. */
+const DEVICE_KEY = "photoCapture.videoDeviceId";
+
+function errName(err: unknown): string {
+  return err instanceof DOMException || err instanceof Error ? err.name : "";
+}
+
+/** True for the failures that a second, unconstrained getUserMedia can fix:
+ *  a remembered camera that has been unplugged, or a machine whose only
+ *  camera is an external one the browser refuses to call "user"-facing. */
+function isConstraintFailure(err: unknown): boolean {
+  const name = errName(err);
+  return (
+    name === "OverconstrainedError" ||
+    name === "ConstraintNotSatisfiedError" ||
+    name === "NotFoundError" ||
+    name === "DevicesNotFoundError"
+  );
+}
+
+function describeCameraError(err: unknown): string {
+  switch (errName(err)) {
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+    case "OverconstrainedError":
+      return "No camera found. Plug in a USB camera and press Turn on camera again, or use the Upload tab.";
+    case "NotAllowedError":
+    case "PermissionDeniedError":
+    case "SecurityError":
+      return "Camera access is blocked. Allow it from the padlock in the address bar, or use the Upload tab.";
+    case "NotReadableError":
+    case "TrackStartError":
+      return "The camera is in use by another app (Zoom, Teams, Camera). Close it and try again.";
+    default:
+      return "Camera unavailable. Check permissions, or use the Upload tab.";
+  }
+}
 
 /**
  * How the chosen image is fitted before upload.
@@ -98,6 +138,25 @@ export default function PhotoCapture({
   // "Turn on camera" (which would otherwise make a capture-then-remove-
   // then-turn-on-camera sequence the only way to reshoot).
   const [capturedFrom, setCapturedFrom] = useState<Tab | null>(null);
+  // The video inputs the machine can see, and which one the operator picked.
+  // A desk PC has no built-in camera, so the camera that matters is whatever
+  // USB webcam is plugged in — and where several video inputs exist (a USB
+  // webcam alongside a virtual camera installed by a meeting app) the
+  // browser's default pick is regularly the wrong one. Holding an explicit
+  // deviceId makes that the operator's choice rather than the browser's.
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState<string | null>(() => {
+    // Read straight from storage rather than in an effect: the value is
+    // needed by the very first startCamera call, which can happen before an
+    // effect that only mirrors it would have run. Nothing is rendered from it
+    // until `devices` is populated, so this cannot desync hydration.
+    if (typeof window === "undefined") return null;
+    try {
+      return window.localStorage.getItem(DEVICE_KEY);
+    } catch {
+      return null;
+    }
+  });
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -121,6 +180,53 @@ export default function PhotoCapture({
   // getUserMedia needs a secure context; localhost qualifies, plain http does not.
   const cameraSupported =
     typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+
+  /**
+   * Reloads the video-input list. Worth calling both after a stream is
+   * granted — deviceIds and labels are empty strings until the user has
+   * allowed the camera once, so before that a picker would offer nothing but
+   * blanks — and whenever the OS reports a device change, which is what a USB
+   * camera being plugged in or pulled out looks like from here.
+   */
+  const refreshDevices = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const cams = (await navigator.mediaDevices.enumerateDevices()).filter(
+        (d) => d.kind === "videoinput"
+      );
+      if (!mountedRef.current) return;
+      setDevices(cams);
+      // Only prune the remembered camera once the ids are actually exposed
+      // (they are blank before permission). Forgetting an unplugged camera
+      // matters: an exact deviceId matching nothing fails the request
+      // outright, where letting the browser choose still yields a preview.
+      if (cams.some((c) => c.deviceId)) {
+        setDeviceId((cur) => (cur && cams.some((c) => c.deviceId === cur) ? cur : null));
+      }
+    } catch {
+      // The list is a convenience; the camera still works without it.
+    }
+  }, []);
+
+  // Remember the pick across visits, so a desk that always uses the same USB
+  // webcam gets it selected on the next registration without being asked.
+  useEffect(() => {
+    try {
+      if (deviceId) window.localStorage.setItem(DEVICE_KEY, deviceId);
+      else window.localStorage.removeItem(DEVICE_KEY);
+    } catch {
+      // Storage can be denied (private mode, locked-down kiosk); the picker
+      // still works for the current session.
+    }
+  }, [deviceId]);
+
+  useEffect(() => {
+    const media = navigator.mediaDevices;
+    if (!cameraSupported || !media?.addEventListener) return;
+    const onDeviceChange = () => void refreshDevices();
+    media.addEventListener("devicechange", onDeviceChange);
+    return () => media.removeEventListener("devicechange", onDeviceChange);
+  }, [cameraSupported, refreshDevices]);
 
   function stopCamera() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -179,12 +285,31 @@ export default function PhotoCapture({
     }
   }
 
-  async function startCamera() {
+  /**
+   * Opens a preview stream. `preferred` names the camera to use; omitting it
+   * falls back to the remembered pick, and passing null deliberately lets the
+   * browser choose.
+   */
+  async function startCamera(preferred?: string | null) {
     setError(null);
+    const wanted = preferred === undefined ? deviceId : preferred;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-      });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          // An exact deviceId is the only constraint that reliably pins a
+          // specific USB camera. With no pick yet, facingMode is asked for as
+          // an ideal, never a requirement — a plain external webcam has no
+          // facing mode at all, and demanding one is what made this tab
+          // unusable on a desktop with no built-in camera.
+          video: wanted ? { deviceId: { exact: wanted } } : { facingMode: { ideal: "user" } },
+        });
+      } catch (err) {
+        if (!isConstraintFailure(err)) throw err;
+        // The pinned camera is gone, or nothing matched the ideal. Ask for
+        // any camera at all before giving up.
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      }
       // Two independent things can have made this stream irrelevant while
       // the permission prompt was pending: the user switched away from the
       // Camera tab (tabRef no longer "camera"), or the component unmounted
@@ -197,8 +322,25 @@ export default function PhotoCapture({
       }
       streamRef.current = stream;
       setCameraOn(true);
-    } catch {
-      setError("Camera unavailable. Check permissions, or use the Upload tab.");
+      // Record what the browser actually opened — after a fallback that is
+      // not necessarily what was asked for — so the picker shows the true
+      // camera and the next visit reuses it.
+      const opened = stream.getVideoTracks()[0]?.getSettings().deviceId;
+      if (opened) setDeviceId(opened);
+      // Labels only become readable once permission has been granted, so this
+      // is the first point at which a useful picker can be built.
+      void refreshDevices();
+    } catch (err) {
+      setError(describeCameraError(err));
+    }
+  }
+
+  /** Switches cameras, restarting the preview in place if one is running. */
+  async function selectDevice(id: string) {
+    setDeviceId(id);
+    if (streamRef.current) {
+      stopCamera();
+      await startCamera(id);
     }
   }
 
@@ -251,7 +393,14 @@ export default function PhotoCapture({
           {cameraSupported && (
             <button
               type="button"
-              onClick={() => setTab("camera")}
+              onClick={() => {
+                setTab("camera");
+                // Opening the tab is the moment the operator needs to know
+                // whether this machine has a camera at all, so count the
+                // inputs here rather than waiting for a failed getUserMedia
+                // to say so.
+                void refreshDevices();
+              }}
               className={tabCls(tab === "camera")}
             >
               Camera
@@ -304,7 +453,7 @@ export default function PhotoCapture({
               {!cameraOn ? (
                 <button
                   type="button"
-                  onClick={preview && capturedFrom === "camera" ? retake : startCamera}
+                  onClick={() => void (preview && capturedFrom === "camera" ? retake() : startCamera())}
                   className="rounded-lg border border-line bg-white px-3 py-1.5 text-[13px] font-600 text-ink-soft hover:text-navy"
                 >
                   {preview && capturedFrom === "camera" ? "Retake" : "Turn on camera"}
@@ -328,6 +477,31 @@ export default function PhotoCapture({
                 </>
               )}
             </div>
+          )}
+
+          {tab === "camera" && devices.length > 1 && (
+            <select
+              value={deviceId ?? ""}
+              onChange={(e) => void selectDevice(e.target.value)}
+              className="block max-w-56 rounded-lg border border-line bg-white px-2 py-1.5 text-[12px] font-600 text-ink-soft"
+              aria-label="Camera"
+            >
+              {!deviceId && <option value="">Choose a camera</option>}
+              {devices.map((d, i) => (
+                <option key={d.deviceId || i} value={d.deviceId}>
+                  {/* Unlabelled inputs are the norm until permission has been
+                      granted once; a position is still enough to tell two
+                      cameras apart. */}
+                  {d.label || `Camera ${i + 1}`}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {tab === "camera" && !cameraOn && devices.length === 0 && (
+            <p className="max-w-56 text-[11px] text-ink-soft">
+              No camera detected. Plug in a USB camera, then press Turn on camera.
+            </p>
           )}
 
           {preview && (
