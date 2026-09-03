@@ -3,6 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { apiGet, apiGetBlob, apiGetList, apiPost, apiUpload } from "@/lib/auth";
 import PhotoCapture from "@/components/PhotoCapture";
+import ExtraVehiclePhotos, {
+  emptyExtraPhotos,
+  uploadExtraPhotos,
+  type ExtraPhotos,
+} from "@/components/vehicles/ExtraVehiclePhotos";
 import { VEHICLE_TYPES } from "@/lib/vehicleTypes";
 import Notice from "@/components/Notice";
 import type { IconType } from "react-icons";
@@ -278,6 +283,10 @@ export default function VehicleApplicationForm({
   // exist until then. See submit().
   const [vehiclePhoto, setVehiclePhoto] = useState<Blob | null>(null);
   const [ownerPhoto, setOwnerPhoto] = useState<Blob | null>(null);
+  // The four optional supporting angles. Uploaded after the create for the
+  // same reason the main photo is: they are keyed by a vehicle id that does
+  // not exist until the POST returns.
+  const [extraPhotos, setExtraPhotos] = useState<ExtraPhotos>(emptyExtraPhotos);
 
   // Renewal photo reuse: the plate the photo came from, an object URL for the
   // preview, and whether the clerk chose to override it with a fresh capture.
@@ -461,6 +470,7 @@ export default function VehicleApplicationForm({
     setLookup("idle");
     setVehiclePhoto(null);
     setOwnerPhoto(null);
+    setExtraPhotos(emptyExtraPhotos());
     setRetakePhoto(false);
     clearReusedPhoto();
   }
@@ -532,6 +542,9 @@ export default function VehicleApplicationForm({
           photoFailures.push(`the vehicle photo (${(photoErr as Error).message})`);
         }
       }
+      photoFailures.push(
+        ...(await uploadExtraPhotos(created.vehicle._id, extraPhotos)).failures
+      );
       if (ownerPhoto) {
         try {
           const fd = new FormData();
@@ -544,8 +557,10 @@ export default function VehicleApplicationForm({
       if (photoFailures.length > 0) {
         setError(
           `Registered ${created.vehicle.plate_number}, but ${photoFailures.join(
-            " and "
-          )} did not upload. Add it from the profile.`
+            ", "
+          )} did not upload. Add ${
+            photoFailures.length > 1 ? "them" : "it"
+          } from the profile.`
         );
         resetForm();
         onCreated(created.vehicle);
@@ -874,6 +889,10 @@ export default function VehicleApplicationForm({
             ) : (
               <PhotoCapture onChange={setVehiclePhoto} fit="whole" />
             )}
+          </div>
+
+          <div className="sm:col-span-2">
+            <ExtraVehiclePhotos value={extraPhotos} onChange={setExtraPhotos} />
           </div>
         </div>
 

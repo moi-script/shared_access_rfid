@@ -22,6 +22,10 @@ export const vehicleRoutes = Router();
 // looks like "the photo didn't upload" rather than "the route is unreachable".
 // persons.routes.ts:24 uses the identical pattern for face photos.
 vehicleRoutes.get('/:id/photo', authenticateAny, vehicleController.getPhoto);
+// The extra registration angles. Reachable by the same callers as the main
+// photo above for the same reason — a terminal reads with X-Gate-Key — even
+// though only the profile screen renders them today.
+vehicleRoutes.get('/:id/photos/:slot', authenticateAny, vehicleController.getExtraPhoto);
 
 // Reads are shared across the staff-side console; writes are OSS-only, enforced
 // in the service by assertCanWrite('vehicle'). This deliberately reverses
@@ -47,3 +51,5 @@ vehicleRoutes.patch('/:id', validate(updateVehicleSchema), vehicleController.upd
 vehicleRoutes.patch('/:id/status', validate(vehicleStatusSchema), vehicleController.setStatus);
 vehicleRoutes.post('/:id/photo', uploadPhoto, vehicleController.uploadPhoto);
 vehicleRoutes.delete('/:id/photo', vehicleController.deletePhoto);
+vehicleRoutes.post('/:id/photos/:slot', uploadPhoto, vehicleController.uploadExtraPhoto);
+vehicleRoutes.delete('/:id/photos/:slot', vehicleController.deleteExtraPhoto);

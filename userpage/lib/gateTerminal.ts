@@ -139,6 +139,11 @@ export interface TapDecision {
     }[];
   };
   rfid_uid: string;
+  /** True when the server admitted this passage on a hand-typed ID number
+   *  rather than a scanned card. The terminal renders the "proceed to OSS"
+   *  notice from this, NOT from `reason` — a real reason (exit_without_entry,
+   *  say) can legitimately win that slot on the same tap. */
+  manual_entry?: boolean;
 }
 
 export type TapOutcome =
@@ -152,13 +157,26 @@ export type TapOutcome =
  * while silently discarding every further tap; the guard must see amber instead. */
 const TAP_TIMEOUT_MS = 8000;
 
-export async function postTap(key: string, rfid_uid: string): Promise<TapOutcome> {
+/**
+ * One tap, on whichever credential the guard actually had.
+ *
+ * `label` is what the terminal shows and keys its Recent row on. It is not
+ * always the UID: a manual entry has no card, so it carries the same
+ * `MANUAL:<id number>` string the server writes to the scan log, which keeps
+ * the screen and the audit row saying the same thing.
+ */
+async function submitTap(
+  key: string,
+  credential: { rfid_uid: string } | { id_number: string },
+  label: string
+): Promise<TapOutcome> {
+  const rfid_uid = label;
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/scan/tap`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Gate-Key": key },
-      body: JSON.stringify({ rfid_uid }),
+      body: JSON.stringify(credential),
       signal: AbortSignal.timeout(TAP_TIMEOUT_MS),
     });
   } catch {
@@ -188,6 +206,22 @@ export async function postTap(key: string, rfid_uid: string): Promise<TapOutcome
     state: body.data.access_result === "granted" ? "granted" : "denied",
     rfid_uid,
   };
+}
+
+export function postTap(key: string, rfid_uid: string): Promise<TapOutcome> {
+  return submitTap(key, { rfid_uid }, rfid_uid);
+}
+
+/**
+ * The fallback for a student whose card is lost or broken: the guard types the
+ * number printed on the ID instead.
+ *
+ * The server still applies every rule a tapped card gets — inactive, deleted,
+ * already inside — so this is an alternative credential, not an override.
+ */
+export function postManualTap(key: string, id_number: string): Promise<TapOutcome> {
+  const trimmed = id_number.trim().toUpperCase();
+  return submitTap(key, { id_number: trimmed }, `MANUAL:${trimmed}`);
 }
 
 /** Mints a key for a gate. Requires a superadmin token in the Authorization header. */

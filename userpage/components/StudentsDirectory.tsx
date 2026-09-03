@@ -29,6 +29,11 @@ interface Person {
   // same way, and the toggle offers "Activate" for all of them.
   status: "active" | "inactive" | "pending";
   createdAt?: string;
+  /** Most recent passage admitted on a hand-typed ID number instead of a card,
+   *  within the server's 30-day window. Null for everyone who has only ever
+   *  tapped. See personService's MANUAL_ENTRY_WINDOW_DAYS. */
+  manual_entry_at?: string | null;
+  manual_entry_count?: number;
 }
 
 type TypeFilter = "all" | "student" | "staff" | "employee";
@@ -98,6 +103,8 @@ export default function StudentsDirectory({
   const [deletedLoading, setDeletedLoading] = useState(false);
   const [deletedError, setDeletedError] = useState<string | null>(null);
   const [showDeleted, setShowDeleted] = useState(false);
+  // The OSS follow-up view: only people admitted without a card recently.
+  const [noCardOnly, setNoCardOnly] = useState(false);
 
   // Load the section list for the chosen type; reset section when type changes.
   useEffect(() => {
@@ -113,6 +120,7 @@ export default function StudentsDirectory({
     if (type !== "all") params.set("type", type);
     if (section !== "all") params.set("section", section);
     if (search.trim()) params.set("search", search.trim());
+    if (noCardOnly) params.set("manual_entry", "true");
 
     setLoading(true);
     setError(null);
@@ -123,7 +131,7 @@ export default function StudentsDirectory({
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [type, section, search]);
+  }, [type, section, search, noCardOnly]);
 
   // Debounce so typing in the search box doesn't fire a request per keystroke.
   useEffect(() => {
@@ -258,6 +266,7 @@ export default function StudentsDirectory({
     if (type !== "all") params.set("type", type);
     if (section !== "all") params.set("section", section);
     if (search.trim()) params.set("search", search.trim());
+    if (noCardOnly) params.set("manual_entry", "true");
     const blob = await apiGetBlob(`/persons/export?${params.toString()}`);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -370,12 +379,32 @@ export default function StudentsDirectory({
               ))}
             </select>
 
+            {/* The OSS follow-up list. A filter rather than a screen of its
+                own: whoever is chasing a lost card needs Replace card and the
+                profile link, which are already on this row. */}
+            <button
+              type="button"
+              onClick={() => setNoCardOnly((v) => !v)}
+              aria-pressed={noCardOnly}
+              className={
+                noCardOnly
+                  ? "rounded-xl border-2 border-red bg-red/45 px-4 py-2 text-[13px] font-600 text-ink transition"
+                  : "rounded-xl border border-line bg-white px-4 py-2 text-[13px] font-600 text-ink-soft transition hover:text-navy"
+              }
+            >
+              No-card entries
+            </button>
+
             {/* Acts on the filter above, not on a selection — so what the two
-                buttons reach is always exactly what the table is showing. */}
+                buttons reach is always exactly what the table is showing.
+                That invariant is why both are disabled under the no-card
+                filter: bulk-status has no such filter, so a sweep run here
+                would silently reach every person the OTHER filters match,
+                including everyone whose card works. */}
             <button
               type="button"
               onClick={() => void openSweep("inactive")}
-              disabled={busy}
+              disabled={busy || noCardOnly}
               className="rounded-xl border-2 border-red bg-red/25 px-4 py-2 text-[13px] font-600 text-ink transition hover:bg-red/45 disabled:opacity-40"
             >
               Deactivate all
@@ -383,7 +412,7 @@ export default function StudentsDirectory({
             <button
               type="button"
               onClick={() => void openSweep("active")}
-              disabled={busy}
+              disabled={busy || noCardOnly}
               className="rounded-xl border border-line bg-white px-4 py-2 text-[13px] font-600 text-ink-soft transition hover:text-navy disabled:opacity-40"
             >
               Activate all
@@ -391,9 +420,20 @@ export default function StudentsDirectory({
           </div>
 
           <p className="mt-2 text-[12px] text-ink-soft">
-            Deactivating refuses a person&rsquo;s card at every gate and blocks any new
-            vehicle or gadget registration in their name. Their existing registrations
-            are left as they are.
+            {noCardOnly ? (
+              <>
+                Showing only people a guard admitted by typing their ID number in the last
+                30 days — they were let through without a card and owe OSS the paperwork.
+                Bulk activate and deactivate are off under this filter, because they would
+                reach more people than are listed here.
+              </>
+            ) : (
+              <>
+                Deactivating refuses a person&rsquo;s card at every gate and blocks any new
+                vehicle or gadget registration in their name. Their existing registrations
+                are left as they are.
+              </>
+            )}
           </p>
 
           {error && (
@@ -437,9 +477,33 @@ export default function StudentsDirectory({
                     <tr
                       key={p._id}
                       onClick={() => onView(p._id, p.full_name)}
-                      className="cursor-pointer border-b border-line/60 transition hover:bg-paper"
+                      // Red row: admitted without a card recently. Tinted rather
+                      // than badged alone so it is visible while scanning the
+                      // list for something else entirely, which is the whole
+                      // point — nobody thinks to filter for a student whose
+                      // card they did not know was missing. The hover tint is
+                      // deepened to match, or the row would lose its meaning
+                      // under the cursor.
+                      className={`cursor-pointer border-b border-line/60 transition ${
+                        p.manual_entry_at
+                          ? "bg-red/25 hover:bg-red/45"
+                          : "hover:bg-paper"
+                      }`}
                     >
-                      <td className="py-2.5 font-600 text-ink">{p.full_name}</td>
+                      <td className="py-2.5 font-600 text-ink">
+                        {p.full_name}
+                        {p.manual_entry_at && (
+                          <span
+                            title={`Last admitted by ID number on ${new Date(
+                              p.manual_entry_at
+                            ).toLocaleString()}`}
+                            className="ml-2 whitespace-nowrap rounded-md border border-red bg-white px-1.5 py-0.5 text-[11px] font-600 uppercase tracking-wide text-ink"
+                          >
+                            No card
+                            {(p.manual_entry_count ?? 0) > 1 && ` ×${p.manual_entry_count}`}
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2.5 font-mono text-[13px] text-ink-soft">{p.id_number}</td>
                       <td className="py-2.5 capitalize text-ink-soft">{p.type}</td>
                       <td className="py-2.5 text-ink-soft">{p.department_section ?? "—"}</td>

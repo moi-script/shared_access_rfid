@@ -15,20 +15,58 @@ const rfid = z
   .regex(/^[0-9A-Fa-f]{6,32}$/, 'rfid_uid must be 6-32 hex characters')
   .transform((v) => v.toUpperCase());
 
-/** JWT callers name the gate themselves. */
-export const tapSchema = z.object({
-  rfid_uid: rfid,
-  gate_id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'invalid gate_id'),
-  direction: z.enum(['entry', 'exit']),
-});
+/**
+ * The fallback credential: the number printed on the ID itself.
+ *
+ * Not `rfid`-shaped and deliberately not hex — a student number is whatever
+ * the registrar typed at enrolment, so this only bounds the length and
+ * uppercases it, matching how persons.schema stores it. Case is normalized for
+ * the same reason UIDs are: an exact-match lookup that misses because someone
+ * typed lowercase is a real student standing at a real barrier.
+ */
+const idNumber = z
+  .string()
+  .trim()
+  .min(3, 'id_number is too short')
+  .max(32, 'id_number is too long')
+  .transform((v) => v.toUpperCase());
 
 /**
- * Device callers send only the UID. Gate and direction come from the key, so
- * any gate_id or direction in the body is stripped rather than trusted.
+ * A tap carries EITHER a scanned UID or a hand-typed ID number, never both and
+ * never neither.
+ *
+ * The manual path exists for a student whose card is lost or broken and who has
+ * to settle it with OSS — the barrier still admits them, and the scan log
+ * records that it was a hand-typed entry. Enforced here rather than in the
+ * service so a malformed body is a 400 instead of an ambiguous tap.
+ */
+const oneCredential = <T extends { rfid_uid?: string; id_number?: string }>(v: T, ctx: z.RefinementCtx) => {
+  if (!v.rfid_uid === !v.id_number) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Send exactly one of rfid_uid or id_number',
+    });
+  }
+};
+
+/** JWT callers name the gate themselves. */
+export const tapSchema = z
+  .object({
+    rfid_uid: rfid.optional(),
+    id_number: idNumber.optional(),
+    gate_id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'invalid gate_id'),
+    direction: z.enum(['entry', 'exit']),
+  })
+  .superRefine(oneCredential);
+
+/**
+ * Device callers send only the credential. Gate and direction come from the
+ * key, so any gate_id or direction in the body is stripped rather than trusted.
  */
 export const tapDeviceSchema = z
-  .object({ rfid_uid: rfid })
-  .transform((v) => ({ rfid_uid: v.rfid_uid }));
+  .object({ rfid_uid: rfid.optional(), id_number: idNumber.optional() })
+  .superRefine(oneCredential)
+  .transform((v) => ({ rfid_uid: v.rfid_uid, id_number: v.id_number }));
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'invalid id');
 

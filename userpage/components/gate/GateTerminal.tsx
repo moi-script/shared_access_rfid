@@ -11,6 +11,7 @@ import {
   clearStoredGate,
   getStoredGate,
   postTap,
+  postManualTap,
   type GateConfig,
   type GateRouteId,
   type TapDecision,
@@ -19,7 +20,7 @@ import {
 import { reasonText } from "@/lib/reasonText";
 import { API_BASE } from "@/lib/auth";
 
-const RESET_MS = 2000;
+const RESET_MS = 3000;
 const UID_RE = /^[0-9A-Fa-f]{6,32}$/;
 // A USB keyboard-wedge reader emits each of a UID's characters a few
 // milliseconds apart — far faster than a human can type. This governs only
@@ -286,6 +287,11 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
   // next one can be checked against MAX_KEYSTROKE_GAP_MS.
   const bufferRef = useRef("");
   const lastKeyTimeRef = useRef<number | null>(null);
+  // The hand-typed ID number. Its own field rather than a mode on the reader
+  // buffer: the global keydown listener deliberately ignores <input> targets,
+  // so a guard typing here cannot be mistaken for a reader burst, and a card
+  // tapped mid-typing still goes through the normal path.
+  const [manualId, setManualId] = useState("");
 
   // localStorage is unavailable during SSR, so config resolves after mount.
   useEffect(() => {
@@ -365,12 +371,20 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
     return () => clearTimeout(t);
   }, [devicePrompt, closeExitPrompt]);
 
-  const handleUid = useCallback(async (uid: string) => {
+  /**
+   * One tap, from the moment the credential is settled to the auto-reset.
+   *
+   * Takes a sender rather than a UID because the terminal now has two ways in:
+   * the reader's keystroke burst, and a guard typing an ID number for a student
+   * whose card is missing. Everything after the POST — the busy guard, the
+   * gadget branches, Recent, the reset timer — is identical for both, and was
+   * not worth a second copy.
+   */
+  const runTap = useCallback(async (send: () => Promise<TapOutcome>) => {
     if (!config) return;
     // Ignore, never queue: a queued tap would let the next person through on a
     // result the guard has already read.
     if (busyRef.current) return;
-    if (!UID_RE.test(uid)) return;
 
     busyRef.current = true;
     setPending(true);
@@ -384,7 +398,7 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
     // again, letting a second tap in before the guard has read the outcome.
     let releasedByTimer = false;
     try {
-      const result = await postTap(config.key, uid);
+      const result = await send();
 
       if (result.state === "unauthorized") {
         // The key is dead. Say so rather than refusing to grant.
@@ -534,6 +548,31 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
       if (!releasedByTimer) busyRef.current = false;
     }
   }, [config, routeId, devicePrompt, meta, closeExitPrompt]);
+
+  const handleUid = useCallback(
+    (uid: string) => {
+      if (!config || !UID_RE.test(uid)) return;
+      void runTap(() => postTap(config.key, uid));
+    },
+    [config, runTap]
+  );
+
+  /** The lanes where typing an ID number is a real alternative to a card: the
+   *  person gates, minus the Gadget Lane, which never takes a person at all
+   *  (see reasonText's person_not_allowed_at_gadget_lane). The server refuses
+   *  the rest anyway — this only decides whether the field is offered. */
+  const manualAllowed = meta.type === "person" && !meta.gadgetFocus;
+
+  const submitManualId = useCallback(() => {
+    const id = manualId.trim();
+    if (!config || !manualAllowed || id.length < 3) return;
+    // Checked here as well as inside runTap, which would otherwise drop this
+    // submit silently AFTER the field had been cleared — leaving the guard to
+    // retype a number they had already entered correctly.
+    if (busyRef.current) return;
+    setManualId("");
+    void runTap(() => postManualTap(config.key, id));
+  }, [config, manualAllowed, manualId, runTap]);
 
   // Global listener: the reader is a keyboard, but no longer one we keep
   // focused. Every keystroke on the page is inspected instead, so a tap is
@@ -927,6 +966,22 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
                       {reasonText(outcome.reason)}
                     </p>
                   )}
+                  {/* Gold on a blue GRANTED card, like the gadget lane's
+                      "no device registered" panel and for the same reason: the
+                      barrier opened, and this is the errand that comes after,
+                      not a refusal. Keyed on `manual_entry` rather than on the
+                      reason, which a real anomaly (exit_without_entry) can
+                      legitimately claim on the very same tap. */}
+                  {outcome.manual_entry && (
+                    <div className="mt-3 rounded-xl bg-gold px-4 py-3 text-navy">
+                      <p className="font-display text-3xl font-700 uppercase tracking-tight">
+                        Proceed to OSS
+                      </p>
+                      <p className="mt-0.5 text-xl font-600">
+                        Admitted without a card — their papers must be settled there.
+                      </p>
+                    </div>
+                  )}
                   {outcome.access_result === "granted" && !outcome.person?.photo_url && (
                     <p className="mt-2 text-xl font-700">No photo on file</p>
                   )}
@@ -953,6 +1008,56 @@ export default function GateTerminal({ routeId }: { routeId: GateRouteId }) {
               </div>
             )}
         </div>
+
+        {/* The lost-card fallback.
+
+            On its own navy band, between the result and Recent, so it is in a
+            fixed place whatever the tone behind the card is doing — and so it
+            never appears or disappears as taps come and go, which at a barrier
+            would have a guard hunting for it exactly when they need it.
+
+            The global keydown listener ignores events whose target is an
+            <input>, so typing in here can never be parsed as a reader burst,
+            and a card tapped while the field has focus still goes through the
+            ordinary path. */}
+        {manualAllowed && (
+          <div className="-mx-8 shrink-0 border-t border-white/10 bg-ink px-8 py-4 text-white">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                submitManualId();
+              }}
+              className="flex flex-wrap items-center gap-3"
+            >
+              <label
+                htmlFor="manual-id"
+                className="font-mono text-sm uppercase tracking-[0.3em] text-white/45"
+              >
+                No card
+              </label>
+              <input
+                id="manual-id"
+                value={manualId}
+                onChange={(e) => setManualId(e.target.value)}
+                placeholder="Enter ID number"
+                autoComplete="off"
+                spellCheck={false}
+                className="min-w-0 flex-1 rounded-xl border border-white/20 bg-white/8 px-4 py-2.5 font-mono text-xl text-white placeholder:text-white/30 focus:border-gold focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={manualId.trim().length < 3 || pending}
+                className="rounded-xl bg-gold px-5 py-2.5 font-display text-lg font-700 uppercase tracking-[0.12em] text-navy disabled:opacity-40"
+              >
+                {meta.direction === "entry" ? "Admit" : "Release"}
+              </button>
+            </form>
+            <p className="mt-2 text-sm text-white/45">
+              For a student whose card is lost or broken. Recorded as a manual entry —
+              send them to OSS to settle the paperwork.
+            </p>
+          </div>
+        )}
 
         {/* Recent taps. On its own navy band for the same reason the header is
             (see above): the tone behind it changes four ways and small text

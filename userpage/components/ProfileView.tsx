@@ -12,6 +12,7 @@ import AuthedImage, { PersonAvatar } from "@/components/AuthedImage";
 import Notice from "@/components/Notice";
 import SectionHeading from "@/components/SectionHeading";
 import StatTile from "@/components/StatTile";
+import VehiclePhotoStrip from "@/components/vehicles/VehiclePhotoStrip";
 import { gadgetTypeLabel, type GadgetType } from "@/lib/gadgetTypes";
 
 export interface AttendanceRow {
@@ -55,6 +56,10 @@ export interface PersonOverview {
      *  requires auth — this field is only used as a flag to decide whether
      *  that request is worth making at all. */
     photo_url?: string | null;
+    /** The additional registration angles, as authenticated paths. Rendered
+     *  as a thumbnail strip beside the main photo; empty for a vehicle
+     *  registered before extra photos existed. */
+    extra_photo_urls?: string[] | null;
   }[];
   gadgets: {
     // GadgetType, not string: gadgetTypeLabel() is typed to the union, and the
@@ -84,6 +89,9 @@ interface VehicleEditSeed {
   vehicle_type: string;
   vehicle_model: string | null;
   rfid_uid: string;
+  /** So the edit dialog can show which extra slots are already filled without
+   *  a second fetch. */
+  extra_photo_urls: string[];
 }
 
 /** What GadgetEditForm needs to prefill, minus the id (passed separately). */
@@ -315,6 +323,16 @@ export default function ProfileView({
                         <p className="font-mono text-[12px] text-ink-soft">{v.rfid_uid}</p>
                         <span className="shrink-0 text-[12px] text-ink-soft">Owner&apos;s card</span>
                       </div>
+                      {/* The supporting angles captured at registration. The
+                          thumbnail above stays the main photo — it is the one
+                          the gate terminal shows — and these sit beneath it
+                          rather than competing with it. */}
+                      {(v.extra_photo_urls?.length ?? 0) > 0 && (
+                        <VehiclePhotoStrip
+                          urls={v.extra_photo_urls ?? []}
+                          label={v.plate_number}
+                        />
+                      )}
                       {onEditVehicle && (
                         <div className="flex justify-end">
                           <button
@@ -325,6 +343,7 @@ export default function ProfileView({
                                 vehicle_type: v.vehicle_type,
                                 vehicle_model: v.vehicle_model,
                                 rfid_uid: v.rfid_uid,
+                                extra_photo_urls: v.extra_photo_urls ?? [],
                               })
                             }
                             className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-[12px] font-600 text-ink-soft hover:border-navy hover:text-ink"

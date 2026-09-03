@@ -12,6 +12,10 @@ export interface IVehicle extends Document {
   color?: string;
   valid_until: Date;
   photo_url?: string;
+  /** Up to four additional angles, captured at registration alongside the main
+   *  photo. Internal `/vehicles/:id/photos/:slot` paths, rebuilt from the
+   *  stored photos on every upload/delete — see vehicleExtraPhotos.service. */
+  extra_photo_urls?: string[];
   status: 'active' | 'inactive';
   createdAt: Date;
 }
@@ -40,6 +44,9 @@ const vehicleSchema = new Schema<IVehicle>(
     color: { type: String },
     valid_until: { type: Date, required: true, index: true },
     photo_url: { type: String },
+    // Default [] rather than undefined so a client can map over it without a
+    // guard, including on vehicles registered before extra photos existed.
+    extra_photo_urls: { type: [String], default: [] },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
   },
   { timestamps: { createdAt: true, updatedAt: false } }

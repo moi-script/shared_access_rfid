@@ -72,6 +72,19 @@ export const personRepo = {
    */
   findByIdNumber: (id_number: string) => PersonModel.findOne({ id_number }),
 
+  /**
+   * The gate's counterpart to findByIdNumber, and it DOES exclude soft-deleted
+   * rows — for exactly the reason findByRfid does.
+   *
+   * A guard types this number when a student has lost their card, and it is the
+   * only credential behind that grant. Reusing findByIdNumber here would let a
+   * deleted person walk through a barrier by reciting a number that, unlike
+   * their UID, is deliberately never cleared on delete. The two lookups differ
+   * on purpose; this is where that difference is load-bearing.
+   */
+  findActiveByIdNumber: (id_number: string) =>
+    PersonModel.findOne({ id_number, ...notDeleted }),
+
   updateById: (id: string, data: Partial<IPerson>) =>
     PersonModel.findByIdAndUpdate(id, data, { new: true }).lean(),
 };
