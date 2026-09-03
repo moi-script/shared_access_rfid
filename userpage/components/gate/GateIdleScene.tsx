@@ -98,37 +98,22 @@ export default function GateIdleScene({
           <span className="h-3 w-3 rounded-full bg-gold shadow-[0_0_28px_6px] shadow-gold/35" />
         </div>
 
-        {/* The cards, held just off the plate. Two of them now — the school
-            issues a female and a male design, and showing both keeps the idle
-            screen from reading as one gendered card.
+        {/* The cards, held just off the plate. Two of them — the school issues
+            a female and a male design, and showing both keeps the idle screen
+            from reading as one gendered card.
 
-            They are FANNED rather than stacked square: the pair has to say
-            "two cards" at a glance from across a lane, and a square stack only
-            shows an edge. Both are absolutely positioned and pushed out
-            symmetrically (-30% / +30% of the card's own width) from the centre
-            of a card-sized box, so the fan stays centred on the tap point no
-            matter which breakpoint's card size is in play. The back card is
-            recessed with a small scale and brightness step, which reads as
-            depth without a second shadow fighting the first.
+            Laid out SIDE BY SIDE on one row, tops and bottoms flush, rather
+            than fanned or stacked. An overlap always hides part of the card
+            behind it, and on a wall panel read from across a lane the pair has
+            to say "either of these works" at a glance — which it only does when
+            both cards are whole. Neither is recessed for the same reason: they
+            are peers here, not a stack with a front.
 
-            The back card is the RIGHT one, not the left. The portrait sits on
-            the right half of this design, so fanning the other way buries the
-            back card's face under the front card and the pair stops reading as
-            two different students — which is the whole reason there are two.
-
-            Portrait, and sized off its height to stay inside this field at both
-            breakpoints; the 9deg tilt costs about 28px of height at the larger
-            size, which h-96 still clears. */}
-        <div
-          aria-hidden
-          className="gate-float relative h-[14rem] w-[9.05rem] sm:h-[17.5rem] sm:w-[11.3rem]"
-        >
-          <div className="absolute inset-0 translate-x-[30%] rotate-[9deg] scale-[0.94] brightness-[0.82]">
-            <GateIdCard variant="female" scanDelay={1.8} />
-          </div>
-          <div className="absolute inset-0 -translate-x-[30%] -rotate-[6deg]">
-            <GateIdCard variant="male" />
-          </div>
+            The two scan sweeps are offset so the row does not pulse in unison;
+            that reads as one reader passing across both. */}
+        <div aria-hidden className="gate-float-row flex items-center gap-2 sm:gap-3">
+          <GateIdCard variant="male" />
+          <GateIdCard variant="female" scanDelay={1.8} />
         </div>
       </div>
     </div>

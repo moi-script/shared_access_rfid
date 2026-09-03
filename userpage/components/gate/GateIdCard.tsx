@@ -36,7 +36,13 @@ import cardPortraitFemale from "@/public/ncst_id_cards_female.png";
  *
  * Portrait, and sized off its HEIGHT so the pair always clears the reader field
  * it floats in (h-72, sm:h-96). The width and the two scale factors all follow
- * from 420x650: 224px tall -> 144.7 wide -> 0.3446, 280 -> 180.9 -> 0.4307.
+ * from 420x650: 184px tall -> 118.9 wide -> 0.2831, 240 -> 155.1 -> 0.3692.
+ *
+ * Two of these sit side by side, so the row costs twice the width plus a gap:
+ * 2x155.1 + 12 = 322px at the large size, 2x118.9 + 8 = 246px at the small one.
+ * The small size clears a 320px viewport once the terminal's px-8 padding is
+ * taken off, which is what sets it — the card is deliberately smaller than the
+ * one it drew when the idle screen held a single card.
  */
 
 /** The two sample students, matching the two templates in `template_id/`. */
@@ -66,8 +72,8 @@ export default function GateIdCard({
   const student = VARIANTS[variant];
 
   return (
-    <div className="relative h-[14rem] w-[9.05rem] overflow-hidden rounded-xl border border-black/10 bg-white shadow-2xl shadow-black/50 sm:h-[17.5rem] sm:w-[11.3rem]">
-      <div className="h-[650px] w-[420px] origin-top-left scale-[0.3446] font-[Helvetica_Neue,Helvetica,Arial,sans-serif] sm:scale-[0.4307]">
+    <div className="relative h-[11.5rem] w-[7.43rem] overflow-hidden rounded-xl border border-black/10 bg-white shadow-2xl shadow-black/50 sm:h-[15rem] sm:w-[9.67rem]">
+      <div className="h-[650px] w-[420px] origin-top-left scale-[0.2831] font-[Helvetica_Neue,Helvetica,Arial,sans-serif] sm:scale-[0.3692]">
         <div className="flex h-full flex-col bg-white">
           {/* Header — the seal alone. The school's name lives in the banner
               below it on this design, so nothing is set under the mark. */}
