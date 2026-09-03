@@ -8,7 +8,10 @@ export const scanController = {
     // A device key names its own gate; a JWT caller supplies one in the body.
     const input = req.gate
       ? {
-          rfid_uid: req.body.rfid_uid as string,
+          // Exactly one of these is set — scan.schema's oneCredential refine
+          // rejects the body otherwise, so the service never has to guess.
+          rfid_uid: req.body.rfid_uid as string | undefined,
+          id_number: req.body.id_number as string | undefined,
           gate_id: req.gate.gateId,
           direction: req.gate.direction,
         }

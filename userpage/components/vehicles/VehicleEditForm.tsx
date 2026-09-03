@@ -3,6 +3,11 @@
 import { useState } from "react";
 import { apiPatch, apiUpload } from "@/lib/auth";
 import PhotoCapture from "@/components/PhotoCapture";
+import ExtraVehiclePhotos, {
+  emptyExtraPhotos,
+  uploadExtraPhotos,
+  type ExtraPhotos,
+} from "@/components/vehicles/ExtraVehiclePhotos";
 import Notice from "@/components/Notice";
 import { VEHICLE_TYPES } from "@/lib/vehicleTypes";
 
@@ -18,6 +23,10 @@ export interface EditableVehicle {
   color?: string | null;
   // Read-only display only — see the note above the field below.
   rfid_uid: string;
+  /** Stored additional angles, so this form can show what is already on file
+   *  and let the operator drop one. Absent on vehicles registered before
+   *  extra photos existed. */
+  extra_photo_urls?: string[] | null;
 }
 
 export default function VehicleEditForm({
@@ -37,6 +46,13 @@ export default function VehicleEditForm({
     color: vehicle.color ?? "",
   });
   const [photo, setPhoto] = useState<Blob | null>(null);
+  const [extraPhotos, setExtraPhotos] = useState<ExtraPhotos>(emptyExtraPhotos);
+  // Mirrors what the server says is on file. Kept in state rather than read
+  // straight off the prop so removing a slot updates the strip immediately,
+  // without waiting for the parent to refetch the profile.
+  const [storedExtras, setStoredExtras] = useState<string[]>(
+    vehicle.extra_photo_urls ?? []
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -88,6 +104,20 @@ export default function VehicleEditForm({
           return;
         }
       }
+      // Extras last, and non-fatally: the field edits and the main photo are
+      // already saved, so a supporting angle that fails to upload is reported
+      // and the dialog stays open for a retry rather than losing the save.
+      const extras = await uploadExtraPhotos(vehicle._id, extraPhotos);
+      if (extras.urls) setStoredExtras(extras.urls);
+      if (extras.failures.length > 0) {
+        setError(
+          `Saved, but ${extras.failures.join(", ")} didn't upload. ` +
+            "Click Save changes to retry."
+        );
+        setSaving(false);
+        return;
+      }
+      updated.extra_photo_urls = extras.urls ?? storedExtras;
       onSaved(updated);
     } catch (err) {
       setError((err as Error).message);
@@ -195,6 +225,14 @@ export default function VehicleEditForm({
           </p>
           <PhotoCapture onChange={setPhoto} fit="whole" />
         </div>
+
+        <ExtraVehiclePhotos
+          value={extraPhotos}
+          onChange={setExtraPhotos}
+          vehicleId={vehicle._id}
+          existing={storedExtras}
+          onExistingChange={setStoredExtras}
+        />
 
         <button
           type="submit"

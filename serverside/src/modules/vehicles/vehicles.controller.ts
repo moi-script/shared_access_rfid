@@ -4,6 +4,7 @@ import { sendSuccess } from '../../utils/ApiResponse';
 import { actorOf } from '../../utils/authority';
 import { vehicleService } from './vehicles.service';
 import { vehiclePhotoService } from './vehiclePhotos.service';
+import { vehicleExtraPhotoService } from './vehicleExtraPhotos.service';
 
 export const vehicleController = {
   list: asyncHandler(async (req: Request, res: Response) => {
@@ -45,5 +46,39 @@ export const vehicleController = {
   }),
   deletePhoto: asyncHandler(async (req: Request, res: Response) => {
     sendSuccess(res, await vehiclePhotoService.remove(req.params.id, actorOf(req)));
+  }),
+
+  uploadExtraPhoto: asyncHandler(async (req: Request, res: Response) => {
+    sendSuccess(
+      res,
+      await vehicleExtraPhotoService.upload(
+        req.params.id,
+        req.params.slot,
+        actorOf(req),
+        req.file
+      ),
+      201
+    );
+  }),
+  getExtraPhoto: asyncHandler(async (req: Request, res: Response) => {
+    const photo = await vehicleExtraPhotoService.get(req.params.id, req.params.slot);
+    // Byte-for-byte the caching getPhoto does — the profile screen re-requests
+    // the same four photos every time it is opened.
+    const etag = `W/"${photo.updatedAt.getTime()}-${photo.byte_size}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.status(304).end();
+      return;
+    }
+    res.setHeader('Content-Type', photo.mime);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('ETag', etag);
+    res.status(200).send(photo.data);
+  }),
+  deleteExtraPhoto: asyncHandler(async (req: Request, res: Response) => {
+    sendSuccess(
+      res,
+      await vehicleExtraPhotoService.remove(req.params.id, req.params.slot, actorOf(req))
+    );
   }),
 };

@@ -26,6 +26,14 @@ export const REASON_TEXT: Record<string, string> = {
   // Gadget Lane takes devices only. A student who taps their own ID there is
   // simply a few steps early — the person reader is the next one in the lane.
   person_not_allowed_at_gadget_lane: "Tap your ID at Main Entrance",
+  // Not a denial. A granted tap carries this when the guard typed the ID
+  // number because the card was missing — the passage stands, and the student
+  // still owes OSS the paperwork for the lost card.
+  manual_id_entry: "Admitted by ID number — proceed to OSS",
+  unregistered_id_number: "No student with that ID number",
+  // A student number identifies a person, not a car; the vehicle lanes read a
+  // pass and there is nothing to type in place of one.
+  manual_entry_wrong_gate: "ID numbers are for the person gates only",
 };
 export function reasonText(reason: string): string {
   return REASON_TEXT[reason] ?? reason;

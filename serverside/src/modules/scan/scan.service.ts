@@ -24,7 +24,11 @@ const GADGET_LANE_NAME = 'Gadget Lane';
 const MAIN_ENTRANCE_NAME = 'Main Entrance';
 
 interface TapInput {
-  rfid_uid: string;
+  /** Absent on a manual entry — there is no card to have scanned. */
+  rfid_uid?: string;
+  /** The number printed on the ID, typed by the guard when the card is missing.
+   *  Mutually exclusive with rfid_uid; scan.schema enforces that. */
+  id_number?: string;
   gate_id: string;
   direction: 'entry' | 'exit';
 }
@@ -33,6 +37,11 @@ interface TapResult {
   access_result: 'granted' | 'denied';
   reason: string | null;
   scan_time: Date;
+  /** True when this passage was authorised from a hand-typed ID number rather
+   *  than a scanned card. Its own field, not just a `reason`, because a real
+   *  denial reason (inactive_id, already_inside) has to win the reason slot
+   *  while the terminal must STILL tell the guard to send them to OSS. */
+  manual_entry?: boolean;
   person?: {
     full_name: string;
     type: string;
@@ -119,11 +128,31 @@ export const scanService = {
     // owner's ID tap at Main Entrance is what commits it.
     let carryParked = false;
 
-    if (await blockedCardRepo.isBlocked(input.rfid_uid)) {
+    // The credential this tap actually arrived on. `manualEntry` is checked in
+    // several places below rather than derived each time, because the whole
+    // point of the branch is that one field is absent.
+    const manualEntry = !!input.id_number;
+    // What goes in the scan log's required rfid_uid column. A manual entry has
+    // no card, so the row records the typed number under a MANUAL: prefix —
+    // which keeps the log self-describing (nobody reads `2021-00123` as a UID)
+    // and makes every hand-typed passage findable with one search.
+    const loggedUid = manualEntry ? `MANUAL:${input.id_number}` : (input.rfid_uid as string);
+
+    // A blocked-card check is meaningless without a card. The manual path has
+    // its own gate: the person must still be active and not soft-deleted, which
+    // is what findActiveByIdNumber and the status check below enforce.
+    if (!manualEntry && (await blockedCardRepo.isBlocked(input.rfid_uid as string))) {
       access_result = 'denied';
       reason = 'card_blocked';
+    } else if (manualEntry && gate.type !== 'person') {
+      // A student number identifies a person, not a car. The vehicle lanes read
+      // a pass, and there is nothing here for a guard to type in place of one.
+      access_result = 'denied';
+      reason = 'manual_entry_wrong_gate';
     } else {
-      const person = await personRepo.findByRfid(input.rfid_uid);
+      const person = manualEntry
+        ? await personRepo.findActiveByIdNumber(input.id_number as string)
+        : await personRepo.findByRfid(input.rfid_uid as string);
       if (person) {
         personView = {
           full_name: person.full_name,
@@ -175,15 +204,26 @@ export const scanService = {
           entity_id = person._id;
           if (person.status === 'active') {
             access_result = 'granted';
-            reason = null;
+            // Granted, but not silently: a hand-typed entry is a passage the
+            // OSS office still has to settle paperwork for, and this is what
+            // puts that on the terminal and in the log. Overwritten below by
+            // any real denial reason, which is why manual_entry is a separate
+            // field on the result.
+            reason = manualEntry ? 'manual_id_entry' : null;
           } else {
             access_result = 'denied';
             reason = 'inactive_id';
             lapsedAtOwnGate = true;
           }
         }
+      } else if (manualEntry) {
+        // Nothing else to try: a student number is only ever a person. Naming
+        // the credential beats unregistered_uid, which would have the guard
+        // hunting for a card that was never presented.
+        access_result = 'denied';
+        reason = 'unregistered_id_number';
       } else {
-        const vehicle = await vehicleRepo.findByRfid(input.rfid_uid);
+        const vehicle = await vehicleRepo.findByRfid(input.rfid_uid as string);
         if (vehicle) {
           entity_type = 'vehicle';
           entity_id = vehicle._id;
@@ -211,7 +251,7 @@ export const scanService = {
             vehicle_photo_url: vehicle.photo_url,
           };
         } else {
-          const gadget = await gadgetRepo.findByRfid(input.rfid_uid);
+          const gadget = await gadgetRepo.findByRfid(input.rfid_uid as string);
           if (gadget) {
             entity_type = 'gadget';
             entity_id = gadget._id;
@@ -241,7 +281,7 @@ export const scanService = {
                 carryParked = true;
                 pendingCarryStore.park(String(gadget.owner_person_id), {
                   id: String(gadget._id),
-                  rfid_uid: gadget.rfid_uid ?? input.rfid_uid,
+                  rfid_uid: gadget.rfid_uid ?? (input.rfid_uid as string),
                   gadget_type: gadget.gadget_type,
                   brand_model: gadget.brand_model,
                   serial_number: gadget.serial_number,
@@ -362,7 +402,12 @@ export const scanService = {
           reason = 'occupancy_unavailable';
           outcome = 'released';
         }
-        if (outcome === 'exit_without_entry' && reason === null) {
+        // manual_id_entry gives way here: "left without ever tapping in" is
+        // the anomaly worth naming on the row, and the fact that this was a
+        // hand-typed passage is already recorded twice over — in the MANUAL:
+        // prefixed uid below, and on the `manual_entry` flag the terminal
+        // renders the OSS notice from.
+        if (outcome === 'exit_without_entry' && (reason === null || reason === 'manual_id_entry')) {
           reason = 'exit_without_entry';
         }
         if (companionPersonId) {
@@ -481,7 +526,7 @@ export const scanService = {
     }
 
     await scanRepo.createLog({
-      rfid_uid: input.rfid_uid,
+      rfid_uid: loggedUid,
       entity_type,
       entity_id,
       gate_id: gate._id,
@@ -508,7 +553,15 @@ export const scanService = {
 
     liveHub.notifyScan();
 
-    return { access_result, reason, scan_time, person: personView };
+    // Only on a grant: a refused manual entry has nothing to send anybody to
+    // OSS about, and the terminal must render it as a plain denial.
+    return {
+      access_result,
+      reason,
+      scan_time,
+      manual_entry: manualEntry && access_result === 'granted',
+      person: personView,
+    };
   },
 
   async closeGadgetSession(input: {

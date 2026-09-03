@@ -400,6 +400,10 @@ export const dashboardService = {
         // route VehicleEditForm already uploads to. Nullable because a vehicle
         // can exist with no photo captured yet.
         photo_url: vehicle.photo_url ?? null,
+        // The additional registration angles, same flag role as photo_url:
+        // each entry is an authenticated path the profile renders through
+        // AuthedImage. Empty for a vehicle registered before this existed.
+        extra_photo_urls: vehicle.extra_photo_urls ?? [],
       })),
       gadgets: gadgets.map((gadget) => ({
         id: String(gadget._id),

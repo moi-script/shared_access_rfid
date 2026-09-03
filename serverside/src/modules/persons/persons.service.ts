@@ -14,10 +14,12 @@ import { assertUidFree } from '../../utils/assertUidFree';
 import { PersonPhotoModel } from './personPhotos.model';
 import { PersonSignatureModel } from './personSignatures.model';
 import { VehiclePhotoModel } from '../vehicles/vehiclePhotos.model';
+import { VehicleExtraPhotoModel } from '../vehicles/vehicleExtraPhotos.model';
 import { GadgetPhotoModel } from '../gadgets/gadgetPhotos.model';
 import { OccupancyModel } from '../occupancy/occupancy.model';
 import { VehicleApplicationModel } from '../vehicleApplications/vehicleApplications.model';
 import { ErasedPersonModel } from './erasedPersons.model';
+import { ScanLogModel } from '../scan/scan.model';
 
 interface ListQuery {
   page?: string;
@@ -26,6 +28,73 @@ interface ListQuery {
   status?: string;
   section?: string;
   search?: string;
+  /** 'true' narrows the list to people admitted on a hand-typed ID number
+   *  within MANUAL_ENTRY_WINDOW_DAYS — the OSS follow-up list. */
+  manual_entry?: string;
+}
+
+/**
+ * How far back a hand-typed entry keeps flagging someone in the directory.
+ *
+ * A window, not "ever": the flag exists so OSS can chase the paperwork for a
+ * lost card, and a row that stays red for the rest of a student's enrolment
+ * stops meaning anything. Thirty days outlives a weekend and a holiday break
+ * without turning the whole directory red.
+ */
+const MANUAL_ENTRY_WINDOW_DAYS = 30;
+
+/**
+ * Matches every scan log written by the no-card path.
+ *
+ * Keyed on the `MANUAL:` uid prefix rather than on `reason: 'manual_id_entry'`,
+ * because the reason slot is contested — an exit that never had a matching
+ * entry overwrites it with `exit_without_entry` (see scan.service), and those
+ * passages are exactly the ones OSS most wants to see. The prefix is written on
+ * every manual tap and can never collide with a real UID, which is hex.
+ */
+const MANUAL_UID_PREFIX = /^MANUAL:/;
+
+function manualEntryWindowStart(): Date {
+  return new Date(Date.now() - MANUAL_ENTRY_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * The most recent hand-typed passage per person, within the window.
+ *
+ * One aggregate for the whole page rather than a lookup per row: the directory
+ * renders 25 people at a time and this must not become 25 queries.
+ */
+async function manualEntriesFor(
+  ids: Types.ObjectId[]
+): Promise<Map<string, { at: Date; count: number }>> {
+  const out = new Map<string, { at: Date; count: number }>();
+  if (ids.length === 0) return out;
+  const rows = await ScanLogModel.aggregate<{ _id: Types.ObjectId; at: Date; count: number }>([
+    {
+      $match: {
+        entity_type: 'person',
+        entity_id: { $in: ids },
+        rfid_uid: MANUAL_UID_PREFIX,
+        access_result: 'granted',
+        scan_time: { $gte: manualEntryWindowStart() },
+      },
+    },
+    { $group: { _id: '$entity_id', at: { $max: '$scan_time' }, count: { $sum: 1 } } },
+  ]);
+  for (const r of rows) out.set(String(r._id), { at: r.at, count: r.count });
+  return out;
+}
+
+/** Everyone with a hand-typed passage in the window — the `manual_entry=true`
+ *  filter's id set. Distinct, so it is bounded by people rather than by taps. */
+async function manualEntryPersonIds(): Promise<Types.ObjectId[]> {
+  const ids = await ScanLogModel.distinct('entity_id', {
+    entity_type: 'person',
+    rfid_uid: MANUAL_UID_PREFIX,
+    access_result: 'granted',
+    scan_time: { $gte: manualEntryWindowStart() },
+  });
+  return ids as Types.ObjectId[];
 }
 
 /**
@@ -61,8 +130,26 @@ export const personService = {
   async list(query: ListQuery) {
     const p = getPagination(query as Record<string, unknown>);
     const filter = buildListFilter(query);
+    if (query.manual_entry === 'true') {
+      // Narrowed before pagination, not after, or page 2 of "no-card entries"
+      // would be page 2 of the whole directory with most rows removed.
+      filter._id = { $in: await manualEntryPersonIds() };
+    }
     const { items, total } = await personRepo.findPaginated(filter, p);
-    return { items, meta: buildMeta(total, p.page, p.limit) };
+
+    // Attached to every list, filtered or not: the red row in the directory is
+    // the point of this — a clerk should see it while looking someone up for an
+    // unrelated reason, not only after choosing to filter for it.
+    const manual = await manualEntriesFor(items.map((i) => i._id));
+    const withManual = items.map((i) => {
+      const m = manual.get(String(i._id));
+      return {
+        ...i,
+        manual_entry_at: m?.at ?? null,
+        manual_entry_count: m?.count ?? 0,
+      };
+    });
+    return { items: withManual, meta: buildMeta(total, p.page, p.limit) };
   },
 
   /**
@@ -81,14 +168,20 @@ export const personService = {
 
   async exportCsv(query: ListQuery): Promise<string> {
     const filter = buildListFilter(query);
+    // Mirrors list() so the Export button in the directory produces the rows
+    // the clerk is looking at, not the unfiltered directory.
+    if (query.manual_entry === 'true') {
+      filter._id = { $in: await manualEntryPersonIds() };
+    }
     const rows = await personRepo.findAll(filter);
+    const manual = await manualEntriesFor(rows.map((r) => r._id));
     // status and last_activated_at are appended, not inserted, so an existing
     // spreadsheet or import that reads these columns positionally keeps
     // working. `status` was missing entirely until the activation export was
     // asked for — the CSV described who exists, never whether their card works.
     const header =
       'full_name,type,id_number,department_section,contact_email,photo_url,rfid_uid,' +
-      'status,last_activated_at';
+      'status,last_activated_at,last_manual_entry,manual_entry_count';
     const esc = (v: unknown) => {
       const s = v == null ? '' : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -109,6 +202,10 @@ export const personService = {
         r.rfid_uid,
         r.status,
         isoDate(r.last_activated_at),
+        // Blank rather than a zero date when they have not used the no-card
+        // path, for the same reason last_activated_at is blank above.
+        isoDate(manual.get(String(r._id))?.at),
+        manual.get(String(r._id))?.count ?? 0,
       ]
         .map(esc)
         .join(',')
@@ -642,6 +739,7 @@ export const personService = {
     // already gone.
     await Promise.all([
       VehiclePhotoModel.deleteMany({ vehicle_id: { $in: vehicleIds } }),
+      VehicleExtraPhotoModel.deleteMany({ vehicle_id: { $in: vehicleIds } }),
       GadgetPhotoModel.deleteMany({ gadget_id: { $in: gadgetIds } }),
       PersonPhotoModel.deleteOne({ person_id: person._id }),
       PersonSignatureModel.deleteOne({ person_id: person._id }),
