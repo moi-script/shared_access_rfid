@@ -1,88 +1,94 @@
+import Image from "next/image";
 import NcstMark from "@/components/NcstMark";
+import cardPortrait from "@/public/ncst_id_cards.png";
 
 /**
  * The student ID card the idle terminal holds just off the reader plate.
  *
  * A depiction of the physical NCST card, built from the design in
- * `components/template_id/ic_card.html` — white header carrying the seal, navy
- * name banner, yellow body with the photo frame, white footer under a yellow
- * rule. The template's literal colours are kept rather than mapped onto the
- * app's tokens: this draws a real object that exists in the world, and matching
- * the card in the guard's hand matters more here than matching the palette of
- * the screen around it.
+ * `components/template_id/ncst_card_temp.html` — white header carrying the
+ * seal, navy banner naming the school, yellow body with the details beside a
+ * black-framed portrait, and the name box across the foot. The template's
+ * literal colours (#112952, #f7ca18, #f5f5f5, #a0a0a0) and its Helvetica stack
+ * are kept rather than mapped onto the app's tokens and fonts: this draws a
+ * real object that exists in the world, and matching the card in the guard's
+ * hand matters more here than matching the palette of the screen around it.
  *
- * DECORATIVE, and `aria-hidden` at the call site. Every field is a blank
- * placeholder bar rather than a sample name and student number, which is the
- * rule the abstract card this replaced already followed: this sits on a LIVE
- * gate terminal, and a plausible-looking "Alex Taylor Smith / 2024-98765" on
- * screen is something a guard can misread as a real tap. The card is here to
- * say "hold one of these to the reader", nothing more.
+ * The inner card is laid out at the template's OWN 420x650 pixel dimensions and
+ * scaled down with a transform, rather than having every size hand-converted
+ * into a percentage of a small box. That keeps each number in this file
+ * identical to the number in the template — the header really is 190px, the
+ * name really is 30px — so the two can be diffed by eye, and a nudge to one
+ * spacing cannot quietly throw off the proportions of everything else.
+ *
+ * DECORATIVE, and `aria-hidden` at the call site.
+ *
+ * It carries the template's sample identity — Encee Bayani, NCST Heroes — and
+ * the school's cartoon mascot as the portrait. That is a deliberate reversal of
+ * the blank placeholder bars this card used to draw, which existed so a guard
+ * could never misread the idle screen as a real tap. Two things make the sample
+ * safe where a plausible "Alex Taylor Smith / 2024-98765" would not have been:
+ * the mascot art is obviously an illustration rather than a photograph of a
+ * person, and this card renders ONLY in GateIdleScene, which a tap result
+ * replaces outright — the two are never on screen together.
  *
  * Portrait, and sized off its HEIGHT so it always clears the reader field it
- * floats in (h-72, sm:h-96) — the width follows from the template's 280:440.
+ * floats in (h-72, sm:h-96). The width and the two scale factors all follow
+ * from 420x650: 224px tall -> 144.7 wide -> 0.3446, 280 -> 180.9 -> 0.4307.
  */
 export default function GateIdCard() {
   return (
-    <div className="relative h-[14rem] w-[8.9rem] overflow-hidden rounded-xl border border-black/10 bg-white shadow-2xl shadow-black/50 sm:h-[17.5rem] sm:w-[11.15rem]">
-      <div className="flex h-full flex-col">
-        {/* Header — the seal, with the semester validation sticker beside it. */}
-        <div className="relative flex h-[20%] items-center justify-center bg-white">
-          {/* The green sticker reads bottom-to-top on the real card. */}
-          <div
-            className="absolute left-1.5 top-1.5 flex h-[58%] w-[9%] items-center justify-center bg-[#1ed75f] text-center text-[5px] font-700 leading-tight text-black shadow-sm sm:text-[6px]"
-            style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
-          >
-            26-27 1ST SEM
+    <div className="relative h-[14rem] w-[9.05rem] overflow-hidden rounded-xl border border-black/10 bg-white shadow-2xl shadow-black/50 sm:h-[17.5rem] sm:w-[11.3rem]">
+      <div className="h-[650px] w-[420px] origin-top-left scale-[0.3446] font-[Helvetica_Neue,Helvetica,Arial,sans-serif] sm:scale-[0.4307]">
+        <div className="flex h-full flex-col bg-white">
+          {/* Header — the seal alone. The school's name lives in the banner
+              below it on this design, so nothing is set under the mark. */}
+          <div className="flex h-[190px] shrink-0 items-center justify-center pt-[15px]">
+            <NcstMark className="h-auto w-[130px]" />
           </div>
-          <div className="text-center">
-            <NcstMark className="mx-auto h-8 w-8 sm:h-10 sm:w-10" />
-            <p className="mt-0.5 text-[4px] uppercase tracking-[0.08em] text-[#555] sm:text-[5px]">
-              National College of Science &amp; Technology
-            </p>
+
+          {/* Navy banner naming the school. */}
+          <div className="shrink-0 bg-[#112952] px-[10px] py-[12px] text-center text-[21px] font-700 leading-tight tracking-[-0.5px] text-white">
+            National College of Science &amp; Technology
           </div>
-        </div>
 
-        {/* Navy name banner. */}
-        <div className="bg-[#2e3185] py-[3px] text-center text-[5px] font-500 uppercase tracking-[0.06em] text-white sm:text-[6px]">
-          NCST Centralized RFID System
-        </div>
+          {/* Yellow body. Nothing here grows: the template stacks the info row
+              and the name box from the top and leaves the remaining yellow
+              below them, rather than pushing the name box to the foot. */}
+          <div className="flex flex-1 flex-col bg-[#f7ca18] px-[15px] pb-[15px] pt-[25px]">
+            <div className="mb-[25px] flex items-start justify-between px-[5px]">
+              <div className="mt-[35px] flex flex-col justify-end text-[#1a1a1a]">
+                <div className="mb-[25px]">
+                  <p className="mb-[3px] text-[16px] font-700 leading-tight">
+                    Student Number
+                  </p>
+                  <p className="text-[26px] font-800 leading-tight">1998-00001</p>
+                </div>
+                <div>
+                  <p className="mb-[3px] text-[16px] font-700 leading-tight">Course</p>
+                  <p className="text-[21px] font-500 leading-tight">NCST Heroes</p>
+                </div>
+              </div>
 
-        {/* Yellow body — details on the left, photo frame on the right. */}
-        <div className="flex flex-1 items-start justify-between bg-[#e2dc12] px-2.5 py-3">
-          <div className="mt-3 space-y-1">
-            <div className="h-[3px] w-9 rounded-full bg-black/35" />
-            <div className="h-[5px] w-14 rounded-full bg-black/70" />
-            <div className="h-[3px] w-7 rounded-full bg-black/35 !mt-3" />
-            <div className="h-[5px] w-10 rounded-full bg-black/70" />
-          </div>
-          {/* Empty frame: a stand-in face would be a person who does not exist.
-              Filled with a flat grey rather than the .dot-grid utility used
-              elsewhere on this screen — that utility draws WHITE dots, for dark
-              panels, and is invisible against this white frame. */}
-          <div className="mt-1 h-[52px] w-[42px] shrink-0 border-2 border-black bg-neutral-200 sm:h-16 sm:w-[54px]" />
-        </div>
+              <div className="h-[200px] w-[195px] shrink-0 overflow-hidden border-[3px] border-black bg-[#f5f5f5]">
+                <Image
+                  src={cardPortrait}
+                  alt=""
+                  sizes="195px"
+                  className="h-full w-full object-cover"
+                />
+              </div>
+            </div>
 
-        {/* Footer — name and course, then the signature rule. */}
-        <div className="flex h-[27%] flex-col items-center border-t-[3px] border-[#e2dc12] bg-white px-3 pt-2.5">
-          <div className="h-[5px] w-24 rounded-full bg-black/70" />
-          <div className="mt-1.5 h-[3px] w-16 rounded-full bg-black/30" />
-          <div className="mt-2.5 h-[2px] w-full bg-[#e2dc12]" />
-          <div className="flex flex-1 items-center opacity-60">
-            <svg viewBox="0 0 200 60" className="h-5 w-16" xmlns="http://www.w3.org/2000/svg">
-              <path
-                d="M 20 40 C 30 10, 50 10, 40 45 S 70 20, 80 40 S 110 5, 100 35 S 130 50, 120 20 S 150 25, 160 45 C 170 55, 180 15, 190 30"
-                fill="transparent"
-                stroke="black"
-                strokeWidth="4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <div className="border border-[#a0a0a0] bg-[#f5f5f5] px-[10px] py-[12px] text-center text-[#1a1a1a]">
+              <p className="mb-[4px] text-[30px] font-800 leading-tight">Encee Bayani</p>
+              <p className="text-[20px] font-400 leading-tight">NCST Nation Builders</p>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Scan bar sweeping the face — kept from the card this replaced. It is
+      {/* Scan bar sweeping the card — kept from the card this replaced. It is
           the terminal's proof of life: a frozen screen stops sweeping. */}
       <div className="gate-scanline pointer-events-none absolute inset-x-0 h-16 bg-gradient-to-b from-transparent via-white/45 to-transparent" />
     </div>
