@@ -98,11 +98,22 @@ export default function GateIdleScene({
           <span className="h-3 w-3 rounded-full bg-gold shadow-[0_0_28px_6px] shadow-gold/35" />
         </div>
 
-        {/* The card, held just off the plate. Portrait now that it depicts the
-            real NCST ID rather than an abstract navy card, so it is sized off
-            its height to stay inside this field at both breakpoints. */}
-        <div aria-hidden className="gate-float relative">
-          <GateIdCard />
+        {/* The cards, held just off the plate. Two of them — the school issues
+            a female and a male design, and showing both keeps the idle screen
+            from reading as one gendered card.
+
+            Laid out SIDE BY SIDE on one row, tops and bottoms flush, rather
+            than fanned or stacked. An overlap always hides part of the card
+            behind it, and on a wall panel read from across a lane the pair has
+            to say "either of these works" at a glance — which it only does when
+            both cards are whole. Neither is recessed for the same reason: they
+            are peers here, not a stack with a front.
+
+            The two scan sweeps are offset so the row does not pulse in unison;
+            that reads as one reader passing across both. */}
+        <div aria-hidden className="gate-float-row flex items-center gap-2 sm:gap-3">
+          <GateIdCard variant="male" />
+          <GateIdCard variant="female" scanDelay={1.8} />
         </div>
       </div>
     </div>

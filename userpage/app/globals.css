@@ -158,6 +158,17 @@ body {
 }
 .gate-float { animation: ncst-float 6.5s ease-in-out infinite; }
 
+/* The same hover, minus the tilt, for the two-card row on the idle terminal.
+   ncst-float's rotation reads as a single card held at an angle, but applied to
+   a row it leans BOTH cards and the pair stops sitting on one flush line —
+   which is the whole point of standing them side by side. Same 6.5s so the two
+   never drift out of step if both are ever on screen. */
+@keyframes ncst-float-row {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-13px); }
+}
+.gate-float-row { animation: ncst-float-row 6.5s ease-in-out infinite; }
+
 /* Light bar travelling down the card face. */
 @keyframes ncst-scanline {
   0%        { transform: translateY(-140%); opacity: 0; }
@@ -187,7 +198,7 @@ body {
 /* Respect users who prefer no motion */
 @media (prefers-reduced-motion: reduce) {
   .reveal, .scan-ring, .drift, .gate-pulse,
-  .gate-wave, .gate-float, .gate-scanline, .tap-in {
+  .gate-wave, .gate-float, .gate-float-row, .gate-scanline, .tap-in {
     animation: none;
     opacity: 1;
   }
