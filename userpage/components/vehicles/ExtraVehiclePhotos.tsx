@@ -133,11 +133,15 @@ export default function ExtraVehiclePhotos({
             Other angles of the same vehicle. The main photo above is the only one
             the guard sees at the barrier.
           </p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {/* One column until there is genuinely room for two. The forms that
+              render this are capped-width dialogs, so a viewport-wide `sm:`
+              two-up was splitting a ~300px panel into two columns narrower
+              than a single capture widget. */}
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
             {EXTRA_PHOTO_SLOTS.map((slot) => {
               const stored = storedSlots.has(slot);
               return (
-                <div key={slot} className="space-y-1">
+                <div key={slot} className="min-w-0 space-y-1 rounded-lg border border-line/60 p-2">
                   <div className="flex items-center justify-between">
                     <p className="text-[12px] font-600 text-ink-soft">Photo {slot}</p>
                     {stored && vehicleId && (
@@ -152,7 +156,7 @@ export default function ExtraVehiclePhotos({
                     )}
                   </div>
                   {stored && vehicleId && !value[slot - 1] && (
-                    <div className="grid h-20 w-full place-items-center overflow-hidden rounded-lg border border-line bg-paper text-[11px] text-ink-soft">
+                    <div className="grid h-24 w-full place-items-center overflow-hidden rounded-lg border border-line bg-paper text-[11px] text-ink-soft sm:h-28">
                       <AuthedImage
                         path={extraPhotoPath(vehicleId, slot)}
                         alt={`Additional vehicle photo ${slot}`}

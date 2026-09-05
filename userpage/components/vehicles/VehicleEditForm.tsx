@@ -127,120 +127,130 @@ export default function VehicleEditForm({
   }
 
   return (
-    <div className="fixed inset-0 z-40 grid place-items-start overflow-auto bg-ink/40 p-4 sm:p-8">
+    // The dialog owns its own height rather than growing the page: with the
+    // four additional-photo capture widgets unfolded the form is taller than a
+    // laptop screen, and a form that scrolls the backdrop away takes Save with
+    // it. Capped at the viewport, header and Save pinned, only the fields
+    // scroll. dvh, not vh, so a phone's collapsing address bar can't hide the
+    // footer behind itself.
+    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto overscroll-contain bg-ink/40 p-3 sm:p-6">
       <form
         onSubmit={submit}
-        className="mx-auto w-full max-w-lg space-y-3 rounded-2xl border border-line bg-white p-6"
+        className="my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-line bg-white sm:max-h-[calc(100dvh-3rem)] sm:max-w-2xl"
       >
-        <div className="flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-6 sm:py-4">
           <h2 className="font-display text-xl font-700 tracking-tight text-ink">
             Edit vehicle
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="text-[14px] font-600 text-ink-soft hover:text-ink"
+            className="shrink-0 text-[14px] font-600 text-ink-soft hover:text-ink"
           >
             Cancel
           </button>
         </div>
 
-        {error && (
-          <Notice compact className="text-[13px] text-ink">
-            {error}
-          </Notice>
-        )}
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-6">
+          {error && (
+            <Notice compact className="text-[13px] text-ink">
+              {error}
+            </Notice>
+          )}
 
-        <div className="grid grid-cols-2 gap-3">
-          <label className="block text-[13px] font-600 text-ink-soft">
-            Plate number
-            <input
-              required
-              value={form.plate_number}
-              onChange={(e) => set("plate_number", e.target.value)}
-              className={`mt-1 font-mono ${inputCls}`}
-            />
-          </label>
-          <label className="block text-[13px] font-600 text-ink-soft">
-            Vehicle type
-            <select
-              value={form.vehicle_type}
-              onChange={(e) => set("vehicle_type", e.target.value)}
-              className={`mt-1 ${inputCls}`}
-            >
-              {VEHICLE_TYPES.map((t) => (
-                <option key={t} value={t} className="capitalize">
-                  {t[0].toUpperCase() + t.slice(1)}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="block text-[13px] font-600 text-ink-soft">
+              Plate number
+              <input
+                required
+                value={form.plate_number}
+                onChange={(e) => set("plate_number", e.target.value)}
+                className={`mt-1 font-mono ${inputCls}`}
+              />
+            </label>
+            <label className="block text-[13px] font-600 text-ink-soft">
+              Vehicle type
+              <select
+                value={form.vehicle_type}
+                onChange={(e) => set("vehicle_type", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              >
+                {VEHICLE_TYPES.map((t) => (
+                  <option key={t} value={t} className="capitalize">
+                    {t[0].toUpperCase() + t.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
 
-        <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {/* <label className="block text-[13px] font-600 text-ink-soft">
+              Make
+              <input
+                value={form.make}
+                onChange={(e) => set("make", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              />
+            </label> */}
+            {/* <label className="block text-[13px] font-600 text-ink-soft">
+              Model
+              <input
+                value={form.vehicle_model}
+                onChange={(e) => set("vehicle_model", e.target.value)}
+                className={`mt-1 ${inputCls}`}
+              />
+            </label> */}
+          </div>
+
           {/* <label className="block text-[13px] font-600 text-ink-soft">
-            Make
+            Color
             <input
-              value={form.make}
-              onChange={(e) => set("make", e.target.value)}
+              value={form.color}
+              onChange={(e) => set("color", e.target.value)}
               className={`mt-1 ${inputCls}`}
             />
           </label> */}
-          {/* <label className="block text-[13px] font-600 text-ink-soft">
-            Model
+
+          <label className="block text-[13px] font-600 text-ink-soft">
+            RFID UID
             <input
-              value={form.vehicle_model}
-              onChange={(e) => set("vehicle_model", e.target.value)}
-              className={`mt-1 ${inputCls}`}
+              value={vehicle.rfid_uid}
+              disabled
+              readOnly
+              className="mt-1 w-full rounded-xl border border-line bg-paper px-3 py-2 font-mono text-ink-soft"
             />
-          </label> */}
+            <span className="mt-1 block text-[12px] text-ink-soft">
+              Read-only — a vehicle pass uses its owner&apos;s card. Replace the
+              owner&apos;s card to change this.
+            </span>
+          </label>
+
+          <div>
+            <p className="mb-1 text-[13px] font-600 text-ink-soft">
+              Photo — leave blank to keep the current one
+            </p>
+            <PhotoCapture onChange={setPhoto} fit="whole" />
+          </div>
+
+          <ExtraVehiclePhotos
+            value={extraPhotos}
+            onChange={setExtraPhotos}
+            vehicleId={vehicle._id}
+            existing={storedExtras}
+            onExistingChange={setStoredExtras}
+          />
         </div>
 
-        {/* <label className="block text-[13px] font-600 text-ink-soft">
-          Color
-          <input
-            value={form.color}
-            onChange={(e) => set("color", e.target.value)}
-            className={`mt-1 ${inputCls}`}
-          />
-        </label> */}
-
-        <label className="block text-[13px] font-600 text-ink-soft">
-          RFID UID
-          <input
-            value={vehicle.rfid_uid}
-            disabled
-            readOnly
-            className="mt-1 w-full rounded-xl border border-line bg-paper px-3 py-2 font-mono text-ink-soft"
-          />
-          <span className="mt-1 block text-[12px] text-ink-soft">
-            Read-only — a vehicle pass uses its owner&apos;s card. Replace the
-            owner&apos;s card to change this.
-          </span>
-        </label>
-
-        <div>
-          <p className="mb-1 text-[13px] font-600 text-ink-soft">
-            Photo — leave blank to keep the current one
-          </p>
-          <PhotoCapture onChange={setPhoto} fit="whole" />
+        <div className="shrink-0 border-t border-line px-4 py-3 sm:px-6 sm:py-4">
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full rounded-xl bg-navy px-4 py-2.5 text-sm font-600 text-white hover:bg-navy/90 disabled:opacity-60"
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </button>
         </div>
-
-        <ExtraVehiclePhotos
-          value={extraPhotos}
-          onChange={setExtraPhotos}
-          vehicleId={vehicle._id}
-          existing={storedExtras}
-          onExistingChange={setStoredExtras}
-        />
-
-        <button
-          type="submit"
-          disabled={saving}
-          className="w-full rounded-xl bg-navy px-4 py-2.5 text-sm font-600 text-white hover:bg-navy/90 disabled:opacity-60"
-        >
-          {saving ? "Saving…" : "Save changes"}
-        </button>
       </form>
     </div>
   );
