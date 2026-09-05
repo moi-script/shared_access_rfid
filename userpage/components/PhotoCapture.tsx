@@ -445,8 +445,11 @@ export default function PhotoCapture({
         </Notice>
       )}
 
-      <div className="flex items-start gap-3">
-        <div className="grid h-28 w-28 shrink-0 place-items-center overflow-hidden rounded-xl border border-line bg-white text-[11px] text-ink-soft">
+      {/* Wraps rather than squeezes: this widget is rendered four-up inside the
+          vehicle forms' additional-photos grid, where a column is far narrower
+          than the thumbnail plus its controls side by side. */}
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="grid h-24 w-24 shrink-0 place-items-center overflow-hidden rounded-xl border border-line bg-white text-[11px] text-ink-soft sm:h-28 sm:w-28">
           {preview ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -470,16 +473,16 @@ export default function PhotoCapture({
           )}
         </div>
 
-        <div className="space-y-2">
+        <div className="min-w-0 flex-1 basis-48 space-y-2">
           {tab === "upload" ? (
             <input
               type="file"
               accept="image/jpeg,image/png,image/webp"
               onChange={handleFile}
-              className="text-[13px] text-ink-soft file:mr-3 file:rounded-lg file:border file:border-line file:bg-white file:px-3 file:py-1.5 file:text-[13px] file:font-600 file:text-ink-soft"
+              className="block w-full max-w-full text-[13px] text-ink-soft file:mr-3 file:rounded-lg file:border file:border-line file:bg-white file:px-3 file:py-1.5 file:text-[13px] file:font-600 file:text-ink-soft"
             />
           ) : (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               {!cameraOn ? (
                 <button
                   type="button"
@@ -524,7 +527,7 @@ export default function PhotoCapture({
             <select
               value={deviceId ?? ""}
               onChange={(e) => void selectDevice(e.target.value)}
-              className="block max-w-56 rounded-lg border border-line bg-white px-2 py-1.5 text-[12px] font-600 text-ink-soft"
+              className="block w-full max-w-56 rounded-lg border border-line bg-white px-2 py-1.5 text-[12px] font-600 text-ink-soft"
               aria-label="Camera"
             >
               {!deviceId && <option value="">Choose a camera</option>}
@@ -540,7 +543,7 @@ export default function PhotoCapture({
           )}
 
           {tab === "camera" && !cameraOn && namedDevices.length === 0 && (
-            <p className="max-w-56 text-[11px] text-ink-soft">
+            <p className="max-w-full text-[11px] text-ink-soft sm:max-w-56">
               {devices.length === 0
                 ? "No camera detected. Plug in a USB camera, then press Rescan."
                 : // Cameras exist but the browser is still withholding their
@@ -560,7 +563,13 @@ export default function PhotoCapture({
               Remove photo
             </button>
           )}
-          <p className="text-[11px] text-ink-soft">Saved as a 400x400 JPEG.</p>
+          {/* Built from the constants rather than written out, so the two
+              encoders above can't drift away from what this promises. */}
+          <p className="text-[11px] text-ink-soft">
+            {fit === "whole"
+              ? `Saved as a JPEG, whole frame, up to ${MAX_EDGE}px on the long edge.`
+              : `Saved as a ${SIZE}x${SIZE} JPEG.`}
+          </p>
         </div>
       </div>
     </div>
