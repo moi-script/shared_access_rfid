@@ -29,6 +29,7 @@
     "verify:person-status": "ts-node src/config/verifyPersonStatus.ts",
     "verify:gadget-carry": "ts-node src/config/verifyGadgetCarry.ts",
     "verify:erase": "ts-node src/config/verifyErase.ts",
+    "verify:no-card": "ts-node src/config/verifyNoCardResolution.ts",
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {
