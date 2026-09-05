@@ -77,6 +77,11 @@ async function manualEntriesFor(
         rfid_uid: MANUAL_UID_PREFIX,
         access_result: 'granted',
         scan_time: { $gte: manualEntryWindowStart() },
+        // Settled by a card reissue, so it no longer describes anyone who is
+        // without a card. Dropping it here rather than subtracting it later
+        // keeps the `count` honest: the badge's ×N counts only the passages
+        // still outstanding.
+        manual_entry_resolved: { $ne: true },
       },
     },
     { $group: { _id: '$entity_id', at: { $max: '$scan_time' }, count: { $sum: 1 } } },
@@ -93,6 +98,7 @@ async function manualEntryPersonIds(): Promise<Types.ObjectId[]> {
     rfid_uid: MANUAL_UID_PREFIX,
     access_result: 'granted',
     scan_time: { $gte: manualEntryWindowStart() },
+    manual_entry_resolved: { $ne: true },
   });
   return ids as Types.ObjectId[];
 }
@@ -568,6 +574,38 @@ export const personService = {
           err
         );
       }
+    }
+    // The point of the reissue, as far as the directory is concerned: this
+    // person is no longer someone a guard has to wave through by ID number,
+    // so their outstanding hand-typed passages are settled and the red row
+    // clears. Scoped to the window because anything older is already past
+    // the readers' cutoff and stamping it would rewrite up to two years of
+    // history to no effect.
+    //
+    // Non-fatal for the same reason the block above is: the card swap has
+    // already succeeded, and throwing here would report a failed replacement
+    // for one that actually happened, sending the operator back to reissue a
+    // card the person is already holding. The cost of a silent failure is
+    // only that the row stays red until the next reissue or until the
+    // 30-day window rolls past it — a stale worklist entry, not a wrong one.
+    try {
+      await ScanLogModel.updateMany(
+        {
+          entity_type: 'person',
+          entity_id: existing._id,
+          rfid_uid: MANUAL_UID_PREFIX,
+          access_result: 'granted',
+          scan_time: { $gte: manualEntryWindowStart() },
+        },
+        { $set: { manual_entry_resolved: true } }
+      );
+    } catch (err) {
+      console.error(
+        `[persons] FAILED to settle no-card entries for person ${id} after reassignRfid — ` +
+          'their card was replaced but the directory will keep showing them as a no-card ' +
+          'entry until the window expires.',
+        err
+      );
     }
     return updated;
   },

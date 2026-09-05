@@ -11,6 +11,7 @@ export interface IScanLog extends Document {
   reason: string | null;
   scan_time: Date;
   actor_user_id: Types.ObjectId | null;
+  manual_entry_resolved?: boolean;
 }
 
 const TWO_YEARS_SECONDS = 60 * 60 * 24 * 365 * 2;
@@ -30,6 +31,13 @@ const scanLogSchema = new Schema<IScanLog>({
   // This is what makes an override permanently attributable: occupancy's
   // cleared_by is wiped by the person's very next tap.
   actor_user_id: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  // Set only on MANUAL: entries, and only once the person has been issued a
+  // replacement card (persons.service.reassignRfid). It settles the entry
+  // rather than editing it — every field above still reads exactly as the
+  // gate recorded it — and is what takes the red row out of the directory's
+  // no-card follow-up list. Absent on every row written before this existed,
+  // which is why both readers test `$ne: true` rather than `false`.
+  manual_entry_resolved: { type: Boolean, default: undefined },
 });
 
 scanLogSchema.index({ entity_type: 1, entity_id: 1 });
